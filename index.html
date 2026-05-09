@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📋</text></svg>">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: linear-gradient(160deg, #0b1224 0%, #1e1b4b 50%, #0b1224 100%); color: #e2e8f0; min-height: 100vh; }
+        .card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); backdrop-filter: blur(8px); }
+        .label { font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: #94a3b8; }
+        .grade-A\+, .grade-A { color: #f97316; }
+        .grade-B { color: #fb923c; }
+        .grade-C { color: #f5c860; }
+        .grade-C-, .grade-D { color: #9aa3b2; }
+        .grade-F { color: #7a808a; }
+        .pill-bortle-2 { background: rgba(34,197,94,0.18); color: #4ade80; }
+        .pill-bortle-3 { background: rgba(132,204,22,0.18); color: #a3e635; }
+        .pill-bortle-4 { background: rgba(234,179,8,0.18); color: #facc15; }
+        .pill-bortle-5 { background: rgba(249,115,22,0.18); color: #fb923c; }
+        .pill-bortle-6 { background: rgba(220,38,38,0.18); color: #fca5a5; }
+        a.section-link { color: #93c5fd; text-decoration: none; font-size: 0.85rem; }
+        a.section-link:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container mx-auto px-4 py-6 max-w-3xl">
+        <header class="mb-5">
+            <h1 class="text-3xl font-bold" id="dateLine">Today</h1>
+            <p class="text-base text-slate-300 mt-1" id="timeLine"></p>
+        </header>
+        <!-- Shared SVG defs for the sun-horizon scene -->
+        <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+            <defs>
+                <linearGradient id="dailySky" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#1a0a18"/>
+                    <stop offset="50%" stop-color="#4a1823"/>
+                    <stop offset="100%" stop-color="#e07a5f"/>
+                </linearGradient>
+                <radialGradient id="dailySun" cx="0.5" cy="0.5" r="0.5">
+                    <stop offset="0%" stop-color="#fde68a"/>
+                    <stop offset="55%" stop-color="#fbbf24"/>
+                    <stop offset="100%" stop-color="#f97316"/>
+                </radialGradient>
+                <clipPath id="dailySkyClip"><rect x="0" y="0" width="100" height="55"/></clipPath>
+            </defs>
+        </svg>
+        <div id="content" class="space-y-4">
+            <div class="card rounded-xl p-4 text-slate-400">Loading…</div>
+        </div>
+    </div>
+
+    <script>
+    // ── Config ────────────────────────────────────────────────────────
+    const ZIPS = {
+        '92117': { lat: 32.8161, lon: -117.1830, name: 'Clairemont' },
+        '92121': { lat: 32.8949, lon: -117.2089, name: 'Sorrento Valley' },
+    };
+    const TAF_WORKER = 'https://sd-sunset-taf.sami-prehn.workers.dev';
+    const SD_LAT = 32.72, SD_LON = -117.22;
+    const PI = Math.PI, RAD = PI / 180, OBLIQUITY = RAD * 23.4397;
+
+    // ── Spots: sunset (mirrors sd_sunset) ─────────────────────────────
+    const SPOTS = [
+        { name: 'Sunset Cliffs',           grid: 'SGX/53,14', taf: 'KSAN', lat: 32.7157, lon: -117.2542 },
+        { name: 'Torrey Pines Gliderport', grid: 'SGX/55,22', taf: 'KNKX', lat: 32.8906, lon: -117.2528 },
+        { name: 'Mt Soledad',              grid: 'SGX/54,20', taf: 'KSAN', lat: 32.8403, lon: -117.2506 },
+        { name: 'Coronado',                grid: 'SGX/56,13', taf: 'KNZY', lat: 32.6956, lon: -117.1861 },
+        { name: 'OB',                      grid: 'SGX/54,16', taf: 'KSAN', lat: 32.7521, lon: -117.2522 },
+        { name: 'La Jolla Shores',         grid: 'SGX/54,21', taf: 'KSAN', lat: 32.8571, lon: -117.2573 },
+        { name: 'Presidio Park',           grid: 'SGX/56,16', taf: 'KSAN', lat: 32.7583, lon: -117.1977 },
+        { name: 'Mt Helix',                grid: 'SGX/63,15', taf: 'KNKX', lat: 32.7659, lon: -116.9990 },
+        { name: 'Ponto Beach',             grid: 'SGX/54,31', taf: 'KCRQ', lat: 33.0760, lon: -117.3110 },
+        { name: 'Del Mar',                 grid: 'SGX/55,26', taf: 'KCRQ', lat: 32.9700, lon: -117.2650 },
+    ];
+
+    // ── Sites: stargazing (mirrors stargaze) ──────────────────────────
+    const STAR_SITES = [
+        { name: 'Mt Laguna',         lat: 32.8694, lon: -116.4192, grid: 'SGX/85,16', bortle: 3, driveMin: 60 },
+        { name: 'Borrego Springs',   lat: 33.2588, lon: -116.3742, grid: 'SGX/89,33', bortle: 2, driveMin: 120 },
+        { name: 'Palomar Mountain',  lat: 33.3597, lon: -116.8639, grid: 'SGX/72,40', bortle: 3, driveMin: 95 },
+        { name: 'Cuyamaca Rancho',   lat: 32.9486, lon: -116.5894, grid: 'SGX/79,21', bortle: 3, driveMin: 60 },
+        { name: 'Julian',            lat: 33.0786, lon: -116.6022, grid: 'SGX/80,26', bortle: 4, driveMin: 75 },
+        { name: 'Pine Valley',       lat: 32.7553, lon: -116.6094, grid: 'SGX/77,12', bortle: 4, driveMin: 50 },
+        { name: 'Los Peñasquitos Ranch House', lat: 32.9244, lon: -117.1289, grid: 'SGX/59,23', bortle: 6, driveMin: 25 },
+        { name: 'Kumeyaay Lake',     lat: 32.8418, lon: -117.0359, grid: 'SGX/62,19', bortle: 6, driveMin: 25 },
+    ];
+    const WINDOW_START_HOUR = 20; // 8pm
+    const WINDOW_END_HOUR = 24;   // midnight
+
+    // ── Markets (mirrors sd_farmers_markets) ──────────────────────────
+    const WINTER = [10,11,12,1,2,3];
+    const SUMMER = [4,5,6,7,8,9];
+    const MARKETS = [
+        { name: 'Welk Resort', day: 1, hours: '3–7pm', neighborhood: 'Escondido', zip: '92026', openHours: { open: 15, close: 19 } },
+        { name: 'Pacific Beach', day: 2, hours: '2–6pm', neighborhood: 'Pacific Beach', zip: '92109', openHours: { open: 14, close: 18 }, dogFriendly: true },
+        { name: 'Mira Mesa', day: 2, hours: '3–6pm', neighborhood: 'Mira Mesa', zip: '92126', openHours: { open: 15, close: 18 }, closedMonths: [1] },
+        { name: 'Coronado', day: 2, hours: '2:30–6pm', neighborhood: 'Coronado', zip: '92118', openHours: { open: 14.5, close: 18 } },
+        { name: 'Otay Ranch', day: 2, hours: '4–7pm', neighborhood: 'Chula Vista', zip: '91915', openHours: { open: 16, close: 19 } },
+        { name: 'Escondido', day: 2, hours: '2:30pm–sunset', neighborhood: 'Escondido', zip: '92025', openHours: { open: 14.5, close: 19 } },
+        { name: 'San Marcos', day: 2, hours: '3–6pm (winter) / 3–7pm (summer)', neighborhood: 'San Marcos', zip: '92078', openHours: [{ months: WINTER, open: 15, close: 18 }, { months: SUMMER, open: 15, close: 19 }] },
+        { name: 'Little Italy', day: 3, hours: '9:30am–1:30pm', neighborhood: 'Little Italy', zip: '92101', openHours: { open: 9.5, close: 13.5 }, dogFriendly: true },
+        { name: 'Ocean Beach', day: 3, hours: '4–8pm (Apr–Sep) / 4–7pm (Oct–Mar)', neighborhood: 'Ocean Beach', zip: '92107', openHours: [{ months: WINTER, open: 16, close: 19 }, { months: SUMMER, open: 16, close: 20 }], dogFriendly: true },
+        { name: 'South Bay', day: 3, hours: '3–7pm (3–6pm winter)', neighborhood: 'Bonita', zip: '91902', openHours: [{ months: WINTER, open: 15, close: 18 }, { months: SUMMER, open: 15, close: 19 }] },
+        { name: 'Carlsbad', day: 3, hours: '3–7pm (3–6pm winter)', neighborhood: 'Carlsbad', zip: '92008', openHours: [{ months: WINTER, open: 15, close: 18 }, { months: SUMMER, open: 15, close: 19 }], dogFriendly: true },
+        { name: 'North Park', day: 4, hours: '3–6pm', neighborhood: 'North Park', zip: '92104', openHours: { open: 15, close: 18 }, dogFriendly: true },
+        { name: 'Linda Vista', day: 4, hours: '1–6pm', neighborhood: 'Linda Vista', zip: '92111', openHours: { open: 13, close: 18 } },
+        { name: 'Santee', day: 4, hours: '3–7pm (3–6pm winter)', neighborhood: 'Santee', zip: '92071', openHours: [{ months: WINTER, open: 15, close: 18 }, { months: SUMMER, open: 15, close: 19 }] },
+        { name: 'Scripps Ranch', day: 4, hours: '3–7pm', neighborhood: 'Scripps Ranch', zip: '92131', openHours: { open: 15, close: 19 } },
+        { name: 'Oceanside', day: 4, hours: '9am–1pm', neighborhood: 'Oceanside', zip: '92054', openHours: { open: 9, close: 13 }, dogFriendly: true },
+        { name: 'La Mesa', day: 5, hours: '3–7pm', neighborhood: 'La Mesa', zip: '91942', openHours: { open: 15, close: 19 } },
+        { name: 'Rancho Bernardo', day: 5, hours: '9am–1pm', neighborhood: 'Rancho Bernardo', zip: '92128', openHours: { open: 9, close: 13 } },
+        { name: 'Imperial Beach', day: 5, hours: '2–6pm', neighborhood: 'Imperial Beach', zip: '91932', openHours: { open: 14, close: 18 }, dogFriendly: true },
+        { name: 'Borrego Springs', day: 5, hours: '7am–12pm (Nov–Apr) / 7–10am (May–Oct)', neighborhood: 'Borrego Springs', zip: '92004', openHours: [{ months: [11,12,1,2,3,4], open: 7, close: 12 }, { months: [5,6,7,8,9,10], open: 7, close: 10 }] },
+        { name: 'Little Italy Mercato', day: 6, hours: '8am–2pm', neighborhood: 'Little Italy', zip: '92101', openHours: { open: 8, close: 14 }, dogFriendly: true },
+        { name: 'City Heights', day: 6, hours: '9am–1pm', neighborhood: 'City Heights', zip: '92125', openHours: { open: 9, close: 13 } },
+        { name: 'Point Loma', day: 6, hours: '10am–1pm', neighborhood: 'Point Loma', zip: '92107', openHours: { open: 10, close: 13 }, dogFriendly: true },
+        { name: 'Poway', day: 6, hours: '8am–1pm', neighborhood: 'Poway', zip: '92074', openHours: { open: 8, close: 13 } },
+        { name: 'Rancho Peñasquitos', day: 6, hours: '9am–1pm', neighborhood: 'Rancho Peñasquitos', zip: '92129', openHours: { open: 9, close: 13 } },
+        { name: 'Del Mar', day: 6, hours: '1–4pm', neighborhood: 'Del Mar', zip: '92014', openHours: { open: 13, close: 16 }, dogFriendly: true },
+        { name: 'Vista', day: 6, hours: '8am–12pm', neighborhood: 'Vista', zip: '92081', openHours: { open: 8, close: 12 } },
+        { name: 'Fallbrook', day: 6, hours: '9am–1:30pm', neighborhood: 'Fallbrook', zip: '92028', openHours: { open: 9, close: 13.5 } },
+        { name: 'Hillcrest', day: 0, hours: '8am–2pm', neighborhood: 'Hillcrest', zip: '92103', openHours: { open: 8, close: 14 }, dogFriendly: true },
+        { name: 'La Jolla Open Aire', day: 0, hours: '9am–1pm', neighborhood: 'La Jolla', zip: '92037', openHours: { open: 9, close: 13 }, dogFriendly: true },
+        { name: 'Chula Vista', day: 0, hours: '10am–2pm', neighborhood: 'Chula Vista', zip: '91910', openHours: { open: 10, close: 14 } },
+        { name: 'Leucadia', day: 0, hours: '10am–2pm', neighborhood: 'Encinitas', zip: '92024', openHours: { open: 10, close: 14 }, dogFriendly: true },
+        { name: 'Solana Beach', day: 0, hours: '12–4pm', neighborhood: 'Solana Beach', zip: '92075', openHours: { open: 12, close: 16 }, dogFriendly: true },
+        { name: 'Rancho Santa Fe', day: 0, hours: '9:30am–2pm', neighborhood: 'Rancho Santa Fe', zip: '92091', openHours: { open: 9.5, close: 14 } },
+        { name: 'Santa Ysabel', day: 0, hours: '10am–6pm', neighborhood: 'Santa Ysabel', zip: '92070', openHours: { open: 10, close: 18 } },
+    ];
+    const MARKET_ZIP_COORDS = {
+        '92026': [33.167, -117.014], '92109': [32.793, -117.234], '92126': [32.913, -117.144],
+        '92118': [32.686, -117.183], '91915': [32.615, -116.950], '92025': [33.119, -117.086],
+        '92078': [33.143, -117.166], '92101': [32.721, -117.169], '92107': [32.748, -117.250],
+        '91902': [32.660, -117.016], '92008': [33.157, -117.347], '92104': [32.747, -117.130],
+        '92111': [32.771, -117.163], '92071': [32.838, -116.974], '92131': [32.883, -117.093],
+        '92054': [33.196, -117.380], '91942': [32.768, -117.023], '92128': [32.999, -117.061],
+        '91932': [32.583, -117.113], '92004': [33.256, -116.375], '92125': [32.810, -117.094],
+        '92074': [32.963, -117.036], '92129': [32.952, -117.115], '92014': [32.959, -117.265],
+        '92081': [33.183, -117.215], '92028': [33.373, -117.251], '92103': [32.747, -117.164],
+        '92037': [32.833, -117.271], '91910': [32.640, -117.084], '92024': [33.062, -117.297],
+        '92075': [32.990, -117.271], '92091': [33.008, -117.207], '92070': [33.108, -116.680],
+    };
+
+    // ── Dog beaches (mirrors sd_dog_beaches) ──────────────────────────
+    const DOG_BEACHES = [
+        { name: 'Del Mar',  lat: 32.9595, lon: -117.2654, buoyId: '46266' },
+        { name: 'OB',       lat: 32.7503, lon: -117.2517, buoyId: 'SDBC1' },
+        { name: 'Coronado', lat: 32.6859, lon: -117.1831, buoyId: 'SDBC1' },
+    ];
+
+    // ── Astronomy (suncalc-style port) ────────────────────────────────
+    const toDays = (d) => d.getTime() / 86400000 - 0.5 + 2440588 - 2451545;
+    function sunCoords(d) {
+        const M = RAD * (357.5291 + 0.98560028 * d);
+        const C = RAD * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2*M) + 0.0003 * Math.sin(3*M));
+        const L = M + C + RAD * 102.9372 + PI;
+        return { dec: Math.asin(Math.sin(OBLIQUITY)*Math.sin(L)), ra: Math.atan2(Math.sin(L)*Math.cos(OBLIQUITY), Math.cos(L)) };
+    }
+    function moonCoords(d) {
+        const L = RAD * (218.316 + 13.176396 * d);
+        const M = RAD * (134.963 + 13.064993 * d);
+        const F = RAD * (93.272 + 13.229350 * d);
+        const lng = L + RAD * 6.289 * Math.sin(M);
+        const lat = RAD * 5.128 * Math.sin(F);
+        return {
+            ra:  Math.atan2(Math.sin(lng)*Math.cos(OBLIQUITY) - Math.tan(lat)*Math.sin(OBLIQUITY), Math.cos(lng)),
+            dec: Math.asin(Math.sin(lat)*Math.cos(OBLIQUITY) + Math.cos(lat)*Math.sin(OBLIQUITY)*Math.sin(lng)),
+            dist: 385001 - 20905 * Math.cos(M),
+        };
+    }
+    function moonIllumination(date) {
+        const d = toDays(date), s = sunCoords(d), m = moonCoords(d), sd = 149598000;
+        const phi = Math.acos(Math.sin(s.dec)*Math.sin(m.dec) + Math.cos(s.dec)*Math.cos(m.dec)*Math.cos(s.ra-m.ra));
+        const inc = Math.atan2(sd*Math.sin(phi), m.dist - sd*Math.cos(phi));
+        return (1 + Math.cos(inc)) / 2;
+    }
+    function moonPhaseLabel(illum, date) {
+        const d = toDays(date), s = sunCoords(d), m = moonCoords(d);
+        let diff = (m.ra - s.ra) * (180/PI);
+        diff = ((diff % 360) + 360) % 360;
+        const wax = diff < 180;
+        if (illum < 0.03) return 'New moon';
+        if (illum > 0.97) return 'Full moon';
+        if (illum < 0.47) return wax ? 'Waxing crescent' : 'Waning crescent';
+        if (illum < 0.53) return wax ? 'First quarter' : 'Last quarter';
+        return wax ? 'Waxing gibbous' : 'Waning gibbous';
+    }
+    function siderealTime(d, lw) { return RAD * (280.16 + 360.9856235 * d) - lw; }
+    function altFromHA(H, phi, dec) { return Math.asin(Math.sin(phi)*Math.sin(dec) + Math.cos(phi)*Math.cos(dec)*Math.cos(H)); }
+    function sunAltitude(date, lat, lon) {
+        const d = toDays(date), c = sunCoords(d);
+        const H = siderealTime(d, RAD * -lon) - c.ra;
+        return altFromHA(H, RAD * lat, c.dec);
+    }
+    function moonAltitude(date, lat, lon) {
+        const d = toDays(date), c = moonCoords(d);
+        const H = siderealTime(d, RAD * -lon) - c.ra;
+        return altFromHA(H, RAD * lat, c.dec);
+    }
+
+    // ── NWS gridpoint helpers ─────────────────────────────────────────
+    function parseDuration(iso) {
+        const m = iso.match(/P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?/);
+        if (!m) return 0;
+        return ((+(m[1]||0)*24 + +(m[2]||0))*60 + +(m[3]||0)) * 60000;
+    }
+    function valueAt(values, target) {
+        for (const e of values) {
+            const [s, dur] = e.validTime.split('/');
+            const start = new Date(s).getTime();
+            if (target >= start && target < start + parseDuration(dur)) return e.value;
+        }
+        return null;
+    }
+    async function fetchGrid(grid) {
+        const r = await fetch(`https://api.weather.gov/gridpoints/${grid}`);
+        if (!r.ok) throw new Error(`NWS ${grid}: ${r.status}`);
+        const d = await r.json();
+        return {
+            skyCover: (d.properties?.skyCover?.values) || [],
+            weather:  (d.properties?.weather?.values)  || [],
+        };
+    }
+    async function fetchTAFs(stations) {
+        try {
+            const ids = [...new Set(stations)].join(',');
+            const r = await fetch(`${TAF_WORKER}/?ids=${ids}`);
+            if (!r.ok) return {};
+            const data = await r.json();
+            const map = {};
+            for (const rec of data) if (rec.icaoId && !map[rec.icaoId]) map[rec.icaoId] = rec;
+            return map;
+        } catch (e) { return {}; }
+    }
+    function tafPeriodAt(rec, sec) {
+        if (!rec || !Array.isArray(rec.fcsts)) return null;
+        return rec.fcsts.find(p => p.timeFrom <= sec && sec < p.timeTo) || null;
+    }
+    function classifyTAF(period) {
+        if (!period || !Array.isArray(period.clouds)) return { score: 0, verdict: null };
+        const clouds = period.clouds.filter(c => c && c.base !== null);
+        const veryLow = clouds.filter(c => c.base < 3000);
+        const low = clouds.filter(c => c.base < 5000);
+        const high = clouds.filter(c => c.base >= 20000);
+        const vlH = veryLow.find(c => c.cover === 'BKN' || c.cover === 'OVC');
+        const lH = low.find(c => c.cover === 'BKN' || c.cover === 'OVC');
+        const lM = low.find(c => c.cover === 'SCT');
+        const lL = low.find(c => c.cover === 'FEW');
+        const hH = high.find(c => c.cover === 'BKN' || c.cover === 'OVC');
+        let score = 0, verdict = null;
+        if (vlH) { score += 60; verdict = 'Marine layer'; }
+        else if (lH) { score += 40; verdict = `Low clouds (${lH.base}ft)`; }
+        else if (lM) { score += 20; verdict = `Patchy low clouds (${lM.base}ft)`; }
+        else if (lL) { score += 10; }
+        if (hH && !vlH && !lH) { score -= 15; if (!verdict) verdict = 'Cirrus — best color'; }
+        return { score, verdict };
+    }
+    function verdictForCloud(c) {
+        if (c < 20) return 'Clear & golden';
+        if (c < 50) return 'Great for color';
+        if (c < 75) return 'Partly cloudy';
+        if (c < 90) return 'Hazy';
+        return 'Socked in';
+    }
+    function gradeFor(label) {
+        if (label === 'Cirrus — best color') return 'A+';
+        if (label === 'Great for color')     return 'A';
+        if (label === 'Partly cloudy')       return 'B';
+        if (label === 'Clear & golden')      return 'C';
+        if (label === 'Hazy')                return 'D';
+        if (label.startsWith('Low clouds'))  return 'D';
+        if (label.startsWith('Patchy low'))  return 'C-';
+        if (label === 'Marine layer')        return 'F';
+        if (label === 'Socked in')           return 'D';
+        return 'D';
+    }
+    const GRADE_RANK = { 'A+': 0, 'A': 1, 'B': 2, 'C': 3, 'C-': 4, 'D': 5, 'F': 6 };
+    function blocking(w) { return Array.isArray(w) ? (w.find(x => x && x.weather) || null) : null; }
+
+    // ── Stargazing scoring (mirrors stargaze) ─────────────────────────
+    function bortleBonus(b) { return Math.max(0.3, 1 - (b - 2) * 0.15); }
+    function scoreStargazeNight(skyValues, lat, lon, bortle, nightStart) {
+        const STEP_MIN = 15;
+        const HOURS = STEP_MIN / 60;
+        const wsMs = nightStart + (WINDOW_START_HOUR - 12) * 3600000;
+        const weMs = nightStart + (WINDOW_END_HOUR - 12) * 3600000;
+        const samples = Math.round((weMs - wsMs) / (STEP_MIN * 60000));
+        let darkH = 0, clearDarkH = 0, totalCloud = 0, cloudSamples = 0;
+        let moonUpDuringDarkH = 0, moonIllumSum = 0, moonIllumWeight = 0;
+        let darkStart = null, darkEnd = null;
+        for (let i = 0; i < samples; i++) {
+            const t = wsMs + i * STEP_MIN * 60000;
+            const date = new Date(t);
+            if (sunAltitude(date, lat, lon) * (180/PI) >= -18) continue;
+            const cloud = valueAt(skyValues, t);
+            if (cloud == null) continue;
+            const moonAlt = moonAltitude(date, lat, lon) * (180/PI);
+            if (moonAlt > 0) {
+                moonUpDuringDarkH += HOURS;
+                moonIllumSum += moonIllumination(date);
+                moonIllumWeight++;
+                continue;
+            }
+            darkH += HOURS;
+            if (darkStart === null) darkStart = t;
+            darkEnd = t + STEP_MIN * 60000;
+            totalCloud += cloud;
+            cloudSamples++;
+            clearDarkH += (1 - cloud/100) * HOURS;
+        }
+        return {
+            score: clearDarkH * bortleBonus(bortle),
+            darkH, clearDarkH,
+            avgCloud: cloudSamples ? totalCloud / cloudSamples : null,
+            moonUpDuringDarkH,
+            avgMoonIllum: moonIllumWeight ? moonIllumSum / moonIllumWeight : 0,
+            darkStart, darkEnd,
+        };
+    }
+    function maxStargazeScore(lat, lon, nightStart) {
+        const STEP_MIN = 15, HOURS = STEP_MIN / 60;
+        const wsMs = nightStart + (WINDOW_START_HOUR - 12) * 3600000;
+        const weMs = nightStart + (WINDOW_END_HOUR - 12) * 3600000;
+        const samples = Math.round((weMs - wsMs) / (STEP_MIN * 60000));
+        let darkH = 0;
+        for (let i = 0; i < samples; i++) {
+            const t = wsMs + i * STEP_MIN * 60000;
+            if (sunAltitude(new Date(t), lat, lon) * (180/PI) < -18) darkH += HOURS;
+        }
+        return darkH;
+    }
+    function galacticCoreVisible(lat, lon, darkStart, darkEnd) {
+        if (!darkStart || !darkEnd) return false;
+        const STEP = 30 * 60000, coreRA = RAD * 266.4, coreDec = RAD * -29;
+        for (let t = darkStart; t <= darkEnd; t += STEP) {
+            const d = toDays(new Date(t));
+            const H = siderealTime(d, RAD * -lon) - coreRA;
+            const alt = altFromHA(H, RAD * lat, coreDec) * (180/PI);
+            if (alt > 20) return true;
+        }
+        return false;
+    }
+
+    // ── Open-Meteo (one fetch per coord) ──────────────────────────────
+    const meteoCache = {};
+    async function fetchMeteo(lat, lon) {
+        const key = `${lat},${lon}`;
+        if (meteoCache[key]) return meteoCache[key];
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
+            + `&hourly=temperature_2m,apparent_temperature,weather_code,relative_humidity_2m,wind_speed_10m,wind_direction_10m,uv_index`
+            + `&daily=temperature_2m_min,temperature_2m_max,weather_code,wind_speed_10m_max`
+            + `&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America%2FLos_Angeles&forecast_days=8`;
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`Open-Meteo ${lat},${lon}: ${r.status}`);
+        const data = await r.json();
+        meteoCache[key] = data;
+        return data;
+    }
+    function indexAt(hourly, date, hour) {
+        const y = date.getFullYear();
+        const mo = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        const h = String(hour).padStart(2, '0');
+        return hourly.time.indexOf(`${y}-${mo}-${d}T${h}:00`);
+    }
+    function dailyIndex(daily, date) {
+        const y = date.getFullYear();
+        const mo = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return daily.time.indexOf(`${y}-${mo}-${d}`);
+    }
+    function weatherEmoji(code) {
+        if (code === 0) return '☀️';
+        if (code === 1) return '🌤️';
+        if (code === 2) return '⛅';
+        if (code === 3) return '☁️';
+        if (code <= 48) return '🌫️';
+        if (code <= 55) return '🌦️';
+        if (code <= 65) return '🌧️';
+        if (code <= 77) return '🌨️';
+        if (code === 80) return '🌦️';
+        if (code <= 82) return '🌧️';
+        if (code <= 86) return '🌨️';
+        return '⛈️';
+    }
+    // Match sd_dog_beaches exactly so the dog-beach table emojis align with that site.
+    function beachWeatherEmoji(code) {
+        const m = { 0:'☀️', 1:'🌤️', 2:'⛅', 3:'☁️', 45:'🌫️', 48:'🌫️',
+                    51:'🌦️', 53:'🌧️', 61:'🌧️', 63:'🌧️', 65:'🌧️',
+                    80:'🌦️', 95:'⛈️' };
+        return m[code] || '🌈';
+    }
+    function uvLabel(uv) {
+        if (uv == null) return null;
+        if (uv <= 2) return { label: 'Low', color: '#16a34a' };
+        if (uv <= 5) return { label: 'Moderate', color: '#ca8a04' };
+        if (uv <= 7) return { label: 'High', color: '#ea580c' };
+        if (uv <= 10) return { label: 'Very High', color: '#dc2626' };
+        return { label: 'Extreme', color: '#9333ea' };
+    }
+    function windDir(deg) {
+        const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+        return dirs[Math.round(deg / 45) % 8];
+    }
+
+    // ── Market hour helpers ───────────────────────────────────────────
+    function getOpenHours(market, date) {
+        if (Array.isArray(market.openHours)) {
+            const m = date.getMonth() + 1;
+            return market.openHours.find(o => o.months.includes(m)) || null;
+        }
+        return market.openHours;
+    }
+    function isMarketActive(market, date) {
+        const m = date.getMonth() + 1;
+        if (market.closedMonths && market.closedMonths.includes(m)) return false;
+        return !!getOpenHours(market, date);
+    }
+
+    // ── NDBC water temp (mirrors sd_dog_beaches) ──────────────────────
+    async function fetchWaterTemp(buoyId) {
+        try {
+            const r = await fetch(`https://corsproxy.io/?https://www.ndbc.noaa.gov/data/realtime2/${buoyId}.txt`);
+            if (!r.ok) return null;
+            const text = await r.text();
+            const lines = text.trim().split('\n');
+            if (lines.length < 3) return null;
+            const header = lines[0].trim().split(/\s+/);
+            const data = lines[2].trim().split(/\s+/);
+            const idx = header.indexOf('WTMP');
+            if (idx === -1) return null;
+            const tempC = parseFloat(data[idx]);
+            if (isNaN(tempC) || tempC === 99 || tempC === 999) return null;
+            return Math.round(tempC * 9/5 + 32);
+        } catch (e) { return null; }
+    }
+
+    // ── Sunset time fetch ─────────────────────────────────────────────
+    function pacificISODate(date) {
+        // 'en-CA' formats as YYYY-MM-DD; 'America/Los_Angeles' picks the Pacific calendar day
+        return date.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+    }
+    async function fetchSunset(date) {
+        const iso = pacificISODate(date);
+        const r = await fetch(`https://api.sunrise-sunset.org/json?lat=${SD_LAT}&lng=${SD_LON}&date=${iso}&formatted=0`);
+        const d = await r.json();
+        return new Date(d.results.sunset);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────
+    function fmtTime(d) {
+        return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    }
+    function fmtDay(date) {
+        return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    }
+    function nextDayOfWeek(target) {
+        const today = new Date();
+        const days = (target - today.getDay() + 7) % 7 || 7;
+        const d = new Date(today);
+        d.setDate(today.getDate() + days);
+        d.setHours(12, 0, 0, 0);
+        return d;
+    }
+
+    // ── Header live updates ───────────────────────────────────────────
+    function updateClock() {
+        const now = new Date();
+        const t = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        const el = document.getElementById('timeLine');
+        if (el) el.textContent = t;
+    }
+    function updateSunIcon() {
+        const disc = document.getElementById('sunDisc');
+        if (!disc) return;
+        const altDeg = sunAltitude(new Date(), SD_LAT, SD_LON) * 180 / PI;
+        const cap = Math.max(-15, Math.min(75, altDeg));
+        const cy = cap >= 0 ? 55 - cap * 0.62 : 55 - cap * 0.7;
+        disc.setAttribute('cy', cy.toFixed(1));
+    }
+    function updateMoonIcon() {
+        const svg = document.getElementById('moonIcon');
+        if (!svg) return;
+        const now = new Date();
+        const illum = moonIllumination(now);
+        const d = toDays(now), s = sunCoords(d), m = moonCoords(d);
+        let raDiff = ((m.ra - s.ra) * 180 / PI) % 360;
+        if (raDiff < 0) raDiff += 360;
+        const waxing = raDiff < 180;
+        const r = 28;
+        let inner = `<circle cx="0" cy="0" r="${r}" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.18)" stroke-width="0.6"/>`;
+        if (illum > 0.99) {
+            inner += `<circle cx="0" cy="0" r="${r}" fill="#f3ecd6"/>`;
+        } else if (illum > 0.01) {
+            const xR = Math.max(r * Math.abs(1 - 2 * illum), 0.01);
+            const outerSweep = waxing ? 1 : 0;
+            const innerSweep = illum < 0.5 ? 0 : 1;
+            const path = `M 0 ${-r} A ${r} ${r} 0 0 ${outerSweep} 0 ${r} A ${xR} ${r} 0 0 ${innerSweep} 0 ${-r} Z`;
+            inner += `<path d="${path}" fill="#f3ecd6"/>`;
+        }
+        svg.innerHTML = inner;
+        const phase = moonPhaseLabel(illum, now);
+        svg.setAttribute('title', `${phase} · ${Math.round(illum * 100)}%`);
+    }
+
+    // ── Main ──────────────────────────────────────────────────────────
+    async function run() {
+        const now = new Date();
+        const dow = now.getDay();
+        const isWeekend = dow === 0 || dow === 6;
+        const showWeekendPrep = dow !== 0;
+
+        document.getElementById('dateLine').textContent = fmtDay(now);
+        updateClock();
+        // Tick every minute so the time + sun position stay current.
+        setInterval(() => { updateClock(); updateSunIcon(); }, 60000);
+
+        const sections = [];
+
+        // ── Weather slots ─────────────────────────────────────────────
+        sections.push(await renderWeather(now, isWeekend));
+
+        // ── Sunset ────────────────────────────────────────────────────
+        sections.push(await renderSunset(now));
+
+        // ── Stargazing tonight ────────────────────────────────────────
+        sections.push(await renderStargaze(now));
+
+        // ── Farmers markets today ─────────────────────────────────────
+        sections.push(await renderFarmers(now));
+
+        // ── Weekend prep (if not Sunday) ──────────────────────────────
+        if (showWeekendPrep) {
+            sections.push(await renderWeekendPrep());
+        }
+
+        document.getElementById('content').innerHTML = sections.join('');
+        // SVGs only exist after innerHTML is set; populate them now.
+        updateSunIcon();
+        updateMoonIcon();
+    }
+
+    async function renderWeather(now, isWeekend) {
+        const slots = isWeekend
+            ? [
+                { hour: 8,  zip: '92117', label: '8am' },
+                { hour: 12, zip: '92117', label: 'Noon', uv: true },
+                { hour: 17, zip: '92117', label: '5pm' },
+              ]
+            : [
+                { hour: 8,  zip: '92117', label: '8am' },
+                { hour: 12, zip: '92121', label: 'Noon', uv: true },
+                { hour: 17, zip: '92117', label: '5pm' },
+              ];
+
+        try {
+            // Fetch all unique zips in parallel
+            const uniqZips = [...new Set(slots.map(s => s.zip).concat(['92117']))];
+            await Promise.all(uniqZips.map(z => fetchMeteo(ZIPS[z].lat, ZIPS[z].lon)));
+
+            const cards = slots.map(s => {
+                const meteo = meteoCache[`${ZIPS[s.zip].lat},${ZIPS[s.zip].lon}`];
+                const idx = indexAt(meteo.hourly, now, s.hour);
+                if (idx === -1) {
+                    return `<div class="rounded-xl p-3 bg-slate-700/40">
+                        <div class="label">${s.label} · ${ZIPS[s.zip].name}</div>
+                        <div class="text-slate-400 text-sm mt-1">No data</div>
+                    </div>`;
+                }
+                const h = meteo.hourly;
+                const temp = Math.round(h.temperature_2m[idx]);
+                const feel = Math.round(h.apparent_temperature[idx]);
+                const code = h.weather_code[idx];
+                const hum = Math.round(h.relative_humidity_2m[idx]);
+                const wSpeed = Math.round(h.wind_speed_10m[idx]);
+                const wDir = windDir(h.wind_direction_10m[idx]);
+                const uv = s.uv ? Math.round(h.uv_index[idx]) : null;
+                const uvL = s.uv ? uvLabel(uv) : null;
+                return `<div class="rounded-xl p-3 bg-slate-700/40">
+                    <div class="flex items-baseline justify-between">
+                        <div class="label">${s.label} · ${ZIPS[s.zip].name}</div>
+                        <div class="text-2xl">${weatherEmoji(code)}</div>
+                    </div>
+                    <div class="text-2xl font-bold mt-0.5">${temp}°<span class="text-sm text-slate-400 font-normal ml-1">feels ${feel}°</span></div>
+                    <div class="text-xs text-slate-300 mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                        <span>💨 ${wSpeed} ${wDir}</span>
+                        <span>💧 ${hum}%</span>
+                        ${s.uv && uv != null ? `<span style="color:${uvL.color}">☀ UV ${uv} ${uvL.label}</span>` : ''}
+                    </div>
+                </div>`;
+            }).join('');
+
+            // Tonight's low @ 92117
+            const meteo117 = meteoCache[`${ZIPS['92117'].lat},${ZIPS['92117'].lon}`];
+            const todayIdx = dailyIndex(meteo117.daily, now);
+            const lowTonight = todayIdx >= 0 ? Math.round(meteo117.daily.temperature_2m_min[todayIdx + 1] ?? meteo117.daily.temperature_2m_min[todayIdx]) : null;
+
+            return `<section class="card rounded-xl p-4">
+                <div class="flex items-baseline justify-between mb-3">
+                    <h2 class="text-lg font-semibold">Weather</h2>
+                    ${lowTonight != null ? `<div class="text-sm"><span class="label">low tonight</span> <span class="font-semibold ml-1">${lowTonight}°</span></div>` : ''}
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">${cards}</div>
+            </section>`;
+        } catch (e) {
+            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Weather</h2><p class="text-slate-400 text-sm mt-2">Couldn't load: ${e.message}</p></section>`;
+        }
+    }
+
+    async function renderSunset(now) {
+        try {
+            const sunset = await fetchSunset(now);
+            const sunsetMs = sunset.getTime();
+
+            const uniqGrids = [...new Set(SPOTS.map(s => s.grid))];
+            const gridResults = await Promise.all(uniqGrids.map(g => fetchGrid(g).then(d => [g, d]).catch(() => [g, { skyCover: [], weather: [] }])));
+            const gridMap = Object.fromEntries(gridResults);
+            const tafMap = await fetchTAFs(SPOTS.map(s => s.taf));
+
+            const sec = Math.floor(sunsetMs / 1000);
+            const evaluated = SPOTS.map(s => {
+                const g = gridMap[s.grid];
+                const cloud = valueAt(g.skyCover, sunsetMs);
+                if (cloud == null) return null;
+                const blocker = blocking(valueAt(g.weather, sunsetMs));
+                const taf = classifyTAF(tafPeriodAt(tafMap[s.taf], sec));
+                let label = taf.verdict
+                    || (blocker ? blocker.weather.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase()) : verdictForCloud(cloud));
+                const grade = gradeFor(label);
+                let score = Math.abs(cloud - 40) + taf.score + (blocker && !taf.verdict ? 35 : 0);
+                return { ...s, cloud, label, grade, score };
+            }).filter(Boolean);
+            evaluated.sort((a, b) => (GRADE_RANK[a.grade] - GRADE_RANK[b.grade]) || (a.score - b.score));
+            const top = evaluated[0];
+
+            const gradeKey = top ? top.grade.replace('+', '\\+') : 'D';
+            return `<section class="card rounded-xl p-4">
+                <div class="flex items-baseline justify-between mb-2">
+                    <div class="flex items-baseline gap-3">
+                        <h2 class="text-lg font-semibold">Sunset</h2>
+                        <span class="text-lg font-semibold" style="color:#fbbf24">${fmtTime(sunset)}</span>
+                    </div>
+                    <a class="section-link" href="https://samiprehn.github.io/sd-sunset/" target="_blank" rel="noopener">all spots ↗</a>
+                </div>
+                ${top ? `
+                    <div class="flex items-center justify-between gap-4">
+                        <div>
+                            <div class="text-xl font-semibold">${top.name}</div>
+                            <div class="text-sm text-slate-300">${top.label} · ${top.cloud}% clouds</div>
+                        </div>
+                        <div class="flex items-center gap-4 flex-shrink-0">
+                            <svg id="sunHorizon" viewBox="0 0 100 70" aria-hidden="true" style="width:80px;height:56px;filter:drop-shadow(0 2px 8px rgba(0,0,0,0.35));">
+                                <rect x="0" y="0" width="100" height="55" rx="6" fill="url(#dailySky)"/>
+                                <circle id="sunDisc" cx="50" cy="60" r="13" fill="url(#dailySun)" clip-path="url(#dailySkyClip)"/>
+                                <line x1="0" y1="55" x2="100" y2="55" stroke="rgba(0,0,0,0.55)" stroke-width="1.6"/>
+                            </svg>
+                            <div class="text-5xl font-bold leading-none grade-${top.grade.replace('+', '\\+').replace('-', '-')}" style="font-feature-settings:'tnum'">${top.grade}</div>
+                        </div>
+                    </div>
+                ` : `<div class="text-slate-400 text-sm">No forecast available.</div>`}
+            </section>`;
+        } catch (e) {
+            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Sunset</h2><p class="text-slate-400 text-sm mt-2">Couldn't load: ${e.message}</p></section>`;
+        }
+    }
+
+    async function evaluateStargazeNight(date) {
+        // date should be the noon-of-day that the night begins on (8pm-midnight that calendar day)
+        const noonStart = new Date(date); noonStart.setHours(12, 0, 0, 0);
+        const ns = noonStart.getTime();
+
+        const uniqGrids = [...new Set(STAR_SITES.map(s => s.grid))];
+        const grids = await Promise.all(uniqGrids.map(g => fetchGrid(g).then(d => [g, d.skyCover]).catch(() => [g, []])));
+        const skyMap = Object.fromEntries(grids);
+
+        const evaluated = STAR_SITES.map(s => {
+            const sky = skyMap[s.grid] || [];
+            const r = scoreStargazeNight(sky, s.lat, s.lon, s.bortle, ns);
+            const cap = maxStargazeScore(s.lat, s.lon, ns);
+            return { ...s, ...r, pct: cap > 0 ? r.score / cap : 0, nightStart: ns };
+        });
+        evaluated.sort((a, b) => b.score - a.score);
+        return evaluated;
+    }
+
+    async function renderStargaze(now) {
+        try {
+            const ranked = await evaluateStargazeNight(now);
+            const top = ranked[0];
+            const illum = moonIllumination(now);
+            const phase = moonPhaseLabel(illum, now);
+            const coreUp = top && galacticCoreVisible(top.lat, top.lon, top.darkStart, top.darkEnd);
+            const darkStartTxt = top.darkStart ? fmtTime(new Date(top.darkStart)) : null;
+            return `<section class="card rounded-xl p-4">
+                <div class="flex items-baseline justify-between mb-2">
+                    <div class="flex items-baseline gap-3">
+                        <h2 class="text-lg font-semibold">Stargazing tonight</h2>
+                        ${darkStartTxt ? `<span class="text-sm text-slate-400">starting at <span class="font-semibold text-slate-200">${darkStartTxt}</span></span>` : ''}
+                    </div>
+                    <a class="section-link" href="https://samiprehn.github.io/stargaze/" target="_blank" rel="noopener">all sites ↗</a>
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                    <div class="flex-1 min-w-0">
+                        <div class="text-xl font-semibold">${top.name}</div>
+                        <div class="text-xs text-slate-400 mt-0.5"><span class="px-1.5 py-0.5 rounded pill-bortle-${top.bortle}">B${top.bortle}</span> · ${top.driveMin} min drive</div>
+                    </div>
+                    <div class="flex items-center gap-3 flex-shrink-0">
+                        <svg id="moonIcon" viewBox="-30 -30 60 60" aria-label="moon phase" style="width:44px;height:44px;filter:drop-shadow(0 0 6px rgba(243,236,214,0.45));"></svg>
+                        <div class="text-2xl font-bold" style="color: hsl(${50 - top.pct*5}, ${5 + top.pct*95}%, ${30 + top.pct*45}%)">${Math.round(top.pct * 100)}%</div>
+                    </div>
+                </div>
+                <div class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                    <div><span class="label">clear-dark</span> <span class="ml-1 font-semibold">${top.clearDarkH.toFixed(1)}h</span></div>
+                    <div><span class="label">avg cloud</span> <span class="ml-1 font-semibold">${top.avgCloud != null ? Math.round(top.avgCloud) + '%' : '—'}</span></div>
+                    <div><span class="label">moon</span> <span class="ml-1 font-semibold">${Math.round(illum*100)}% ${phase.toLowerCase()}</span></div>
+                    <div><span class="label">moon up</span> <span class="ml-1 font-semibold">${top.moonUpDuringDarkH.toFixed(1)}h</span></div>
+                </div>
+                ${coreUp ? `<div class="text-xs mt-2" style="color:#c4b5fd">✨ Galactic core above 20° during the dark window</div>` : ''}
+            </section>`;
+        } catch (e) {
+            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Stargazing tonight</h2><p class="text-slate-400 text-sm mt-2">Couldn't load: ${e.message}</p></section>`;
+        }
+    }
+
+    async function renderFarmers(now) {
+        const dow = now.getDay();
+        const today = MARKETS.filter(m => m.day === dow && isMarketActive(m, now));
+        if (!today.length) {
+            return `<section class="card rounded-xl p-4">
+                <h2 class="text-lg font-semibold">Farmers markets today</h2>
+                <p class="text-slate-400 text-sm mt-2">No markets scheduled today.</p>
+            </section>`;
+        }
+        // Fetch weather for each unique market zip
+        const zips = [...new Set(today.map(m => m.zip))];
+        await Promise.all(zips.map(z => {
+            const c = MARKET_ZIP_COORDS[z];
+            return c ? fetchMeteo(c[0], c[1]).catch(() => null) : null;
+        }));
+
+        const rows = today.map(m => {
+            const c = MARKET_ZIP_COORDS[m.zip];
+            const meteo = c ? meteoCache[`${c[0]},${c[1]}`] : null;
+            const oh = getOpenHours(m, now);
+            let weatherBit = '';
+            if (meteo && oh) {
+                const midHour = Math.round((oh.open + oh.close) / 2);
+                const idx = indexAt(meteo.hourly, now, midHour);
+                if (idx >= 0) {
+                    const apparent = Math.round(meteo.hourly.apparent_temperature[idx]);
+                    const code = meteo.hourly.weather_code[idx];
+                    const uv = Math.round(meteo.hourly.uv_index[idx]);
+                    const uvL = uvLabel(uv);
+                    weatherBit = `<span class="text-base">${weatherEmoji(code)}</span>
+                        <span class="text-sm">${apparent}°</span>
+                        ${uvL ? `<span class="text-xs" style="color:${uvL.color}">UV ${uv}</span>` : ''}`;
+                }
+            }
+            return `<div class="flex items-center gap-3 py-1.5 border-b border-white/5 last:border-0">
+                <div class="flex-1 min-w-0">
+                    <div class="font-medium">${m.name} ${m.dogFriendly ? '<span class="text-xs">🐕</span>' : ''}</div>
+                    <div class="text-xs text-slate-400">${m.hours}</div>
+                </div>
+                <div class="flex items-center gap-2 flex-shrink-0">${weatherBit}</div>
+            </div>`;
+        }).join('');
+
+        return `<section class="card rounded-xl p-4">
+            <div class="flex items-baseline justify-between mb-1">
+                <h2 class="text-lg font-semibold">Farmers markets today</h2>
+                <a class="section-link" href="https://samiprehn.github.io/sd_farmers_markets/" target="_blank" rel="noopener">all markets ↗</a>
+            </div>
+            <div>${rows}</div>
+        </section>`;
+    }
+
+    async function renderWeekendPrep() {
+        const sat = nextDayOfWeek(6);
+        const sun = nextDayOfWeek(0);
+
+        // Dog beaches: Open-Meteo daily highs + noon humidity per beach
+        await Promise.all(DOG_BEACHES.map(b => fetchMeteo(b.lat, b.lon).catch(() => null)));
+
+        function beachRow(b, date, dayLabel, extraClass = '') {
+            const meteo = meteoCache[`${b.lat},${b.lon}`];
+            if (!meteo) return `<tr class="${extraClass}"><td class="px-2 py-1 text-xs text-slate-500" colspan="5">${b.name} ${dayLabel} — no data</td></tr>`;
+            const dIdx = dailyIndex(meteo.daily, date);
+            const noonIdx = indexAt(meteo.hourly, date, 12);
+            if (dIdx < 0) return `<tr class="${extraClass}"><td class="px-2 py-1 text-xs text-slate-500" colspan="5">${b.name} ${dayLabel} —</td></tr>`;
+            const high = Math.round(meteo.daily.temperature_2m_max[dIdx]);
+            // Match sd_dog_beaches: use the noon-hour weather_code, not the daily aggregate
+            const code = noonIdx >= 0 ? meteo.hourly.weather_code[noonIdx] : meteo.daily.weather_code[dIdx];
+            const wind = noonIdx >= 0 ? Math.round(meteo.hourly.wind_speed_10m[noonIdx]) : Math.round(meteo.daily.wind_speed_10m_max[dIdx]);
+            const hum = noonIdx >= 0 ? Math.round(meteo.hourly.relative_humidity_2m[noonIdx]) : null;
+            return `<tr class="${extraClass}">
+                <td class="px-2 py-1 text-xs text-slate-400">${dayLabel}</td>
+                <td class="px-2 py-1 text-sm font-medium">${b.name}</td>
+                <td class="px-2 py-1 text-sm whitespace-nowrap"><span>${beachWeatherEmoji(code)}</span> <span class="font-semibold">${high}°</span></td>
+                <td class="px-2 py-1 text-sm whitespace-nowrap">${wind} mph</td>
+                <td class="px-2 py-1 text-sm whitespace-nowrap">${hum != null ? hum + '%' : '—'}</td>
+            </tr>`;
+        }
+        // Bottom-border on the last Sat row to separate Sat from Sun in the table.
+        const satRows = DOG_BEACHES.map((b, i) => beachRow(b, sat, 'Sat', i === DOG_BEACHES.length - 1 ? 'border-b border-white/15' : ''));
+        const sunRows = DOG_BEACHES.map(b => beachRow(b, sun, 'Sun'));
+        const beachRows = [...satRows, ...sunRows].join('');
+
+        // Markets Sat/Sun
+        const satMkts = MARKETS.filter(m => m.day === 6 && isMarketActive(m, sat));
+        const sunMkts = MARKETS.filter(m => m.day === 0 && isMarketActive(m, sun));
+        const mktList = (mkts) => mkts.map(m => `<li class="text-sm"><span class="font-medium">${m.name}</span> ${m.dogFriendly ? '🐕' : ''} <span class="text-slate-400">· ${m.hours}</span></li>`).join('');
+
+        // Best stargazing: Sat vs Sun, top site of each
+        let starBlock = '';
+        try {
+            const [satRanked, sunRanked] = await Promise.all([
+                evaluateStargazeNight(sat),
+                evaluateStargazeNight(sun),
+            ]);
+            const winner = satRanked[0].score >= sunRanked[0].score
+                ? { night: 'Saturday', date: sat, top: satRanked[0] }
+                : { night: 'Sunday', date: sun, top: sunRanked[0] };
+            const cap = maxStargazeScore(winner.top.lat, winner.top.lon, winner.date.getTime());
+            const pct = cap > 0 ? winner.top.score / cap : 0;
+            const illum = moonIllumination(winner.date);
+            starBlock = `<div class="rounded-lg p-3 bg-slate-700/30">
+                <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Best stargazing night</div>
+                <div class="flex items-baseline justify-between">
+                    <div>
+                        <div class="font-semibold">${winner.night} · ${winner.top.name}</div>
+                        <div class="text-xs text-slate-400 mt-0.5">${winner.top.clearDarkH.toFixed(1)}h clear · ${winner.top.avgCloud != null ? Math.round(winner.top.avgCloud) + '% cloud' : 'no forecast'} · 🌙 ${Math.round(illum*100)}%</div>
+                    </div>
+                    <div class="text-xl font-bold" style="color: hsl(${50 - pct*5}, ${5 + pct*95}%, ${30 + pct*45}%)">${Math.round(pct * 100)}%</div>
+                </div>
+            </div>`;
+        } catch (e) {
+            starBlock = `<div class="text-slate-400 text-sm">Stargazing forecast unavailable: ${e.message}</div>`;
+        }
+
+        return `<section class="card rounded-xl p-4">
+            <h2 class="text-lg font-semibold mb-3">Weekend prep</h2>
+
+            <div class="mb-4">
+                <div class="flex items-baseline justify-between mb-2">
+                    <div class="label">Dog beaches</div>
+                    <a class="section-link" href="https://samiprehn.github.io/sd_dog_beaches/" target="_blank" rel="noopener">all dog beaches ↗</a>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead>
+                            <tr class="text-xs text-slate-400 border-b border-white/10">
+                                <th class="px-2 py-1 text-left font-normal">Day</th>
+                                <th class="px-2 py-1 text-left font-normal">Beach</th>
+                                <th class="px-2 py-1 text-left font-normal">High temp</th>
+                                <th class="px-2 py-1 text-left font-normal">Wind</th>
+                                <th class="px-2 py-1 text-left font-normal">Humidity</th>
+                            </tr>
+                        </thead>
+                        <tbody>${beachRows}</tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                <div>
+                    <div class="label mb-1">Saturday markets</div>
+                    <ul class="space-y-1">${mktList(satMkts) || '<li class="text-xs text-slate-500">none</li>'}</ul>
+                </div>
+                <div>
+                    <div class="label mb-1">Sunday markets</div>
+                    <ul class="space-y-1">${mktList(sunMkts) || '<li class="text-xs text-slate-500">none</li>'}</ul>
+                </div>
+            </div>
+
+            ${starBlock}
+        </section>`;
+    }
+
+    run().catch(err => {
+        document.getElementById('content').innerHTML = `<div class="card rounded-xl p-4"><p class="text-red-400">Couldn't load dashboard: ${err.message}</p></div>`;
+    });
+    </script>
+</body>
+</html>
