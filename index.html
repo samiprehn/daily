@@ -26,9 +26,10 @@
 </head>
 <body>
     <div class="container mx-auto px-4 py-6 max-w-3xl">
-        <header class="mb-5 flex items-baseline gap-3 flex-wrap">
-            <span id="timeLine" class="text-3xl font-bold tracking-tight"></span>
-            <span id="dateLine" class="text-sm text-slate-400"></span>
+        <header class="mb-5 flex items-baseline gap-2 flex-wrap">
+            <span id="dateLine" class="text-xl font-semibold"></span>
+            <span class="text-slate-500">·</span>
+            <span id="timeLine" class="text-xl font-semibold tracking-tight text-slate-300"></span>
         </header>
         <!-- Shared SVG defs for the sun-horizon scene -->
         <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -214,25 +215,34 @@
         }
         return null;
     }
+    const nwsGridCache = {};
     async function fetchGrid(grid) {
+        if (nwsGridCache[grid]) return nwsGridCache[grid];
         const r = await fetch(`https://api.weather.gov/gridpoints/${grid}`);
         if (!r.ok) throw new Error(`NWS ${grid}: ${r.status}`);
         const d = await r.json();
-        return {
+        const out = {
             skyCover: (d.properties?.skyCover?.values) || [],
             weather:  (d.properties?.weather?.values)  || [],
         };
+        nwsGridCache[grid] = out;
+        return out;
     }
+    let _tafsPromise = null;
     async function fetchTAFs(stations) {
-        try {
-            const ids = [...new Set(stations)].join(',');
-            const r = await fetch(`${TAF_WORKER}/?ids=${ids}`);
-            if (!r.ok) return {};
-            const data = await r.json();
-            const map = {};
-            for (const rec of data) if (rec.icaoId && !map[rec.icaoId]) map[rec.icaoId] = rec;
-            return map;
-        } catch (e) { return {}; }
+        if (_tafsPromise) return _tafsPromise;
+        _tafsPromise = (async () => {
+            try {
+                const ids = [...new Set(stations)].join(',');
+                const r = await fetch(`${TAF_WORKER}/?ids=${ids}`);
+                if (!r.ok) return {};
+                const data = await r.json();
+                const map = {};
+                for (const rec of data) if (rec.icaoId && !map[rec.icaoId]) map[rec.icaoId] = rec;
+                return map;
+            } catch (e) { return {}; }
+        })();
+        return _tafsPromise;
     }
     function tafPeriodAt(rec, sec) {
         if (!rec || !Array.isArray(rec.fcsts)) return null;
@@ -587,7 +597,6 @@
                         <div class="text-2xl font-bold whitespace-nowrap">${temp}°<span class="text-sm text-slate-400 font-normal ml-1">feels ${feel}°</span></div>
                         <div class="text-xs text-slate-300 whitespace-nowrap">
                             <span>💨 ${wSpeed} ${wDir}</span>
-                            <span class="ml-2">💧 ${hum}%</span>
                         </div>
                     </div>
                     ${s.uv && uv != null ? `<div class="text-xs mt-1" style="color:${uvL.color}">☀ UV ${uv} ${uvL.label}</div>` : ''}
@@ -611,31 +620,33 @@
         }
     }
 
+    async function evaluateSunset(date) {
+        const sunset = await fetchSunset(date);
+        const sunsetMs = sunset.getTime();
+        const uniqGrids = [...new Set(SPOTS.map(s => s.grid))];
+        const gridResults = await Promise.all(uniqGrids.map(g => fetchGrid(g).then(d => [g, d]).catch(() => [g, { skyCover: [], weather: [] }])));
+        const gridMap = Object.fromEntries(gridResults);
+        const tafMap = await fetchTAFs(SPOTS.map(s => s.taf));
+        const sec = Math.floor(sunsetMs / 1000);
+        const evaluated = SPOTS.map(s => {
+            const g = gridMap[s.grid];
+            const cloud = valueAt(g.skyCover, sunsetMs);
+            if (cloud == null) return null;
+            const blocker = blocking(valueAt(g.weather, sunsetMs));
+            const taf = classifyTAF(tafPeriodAt(tafMap[s.taf], sec));
+            let label = taf.verdict
+                || (blocker ? blocker.weather.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase()) : verdictForCloud(cloud));
+            const grade = gradeFor(label);
+            let score = Math.abs(cloud - 40) + taf.score + (blocker && !taf.verdict ? 35 : 0);
+            return { ...s, cloud, label, grade, score };
+        }).filter(Boolean);
+        evaluated.sort((a, b) => (GRADE_RANK[a.grade] - GRADE_RANK[b.grade]) || (a.score - b.score));
+        return { sunset, top: evaluated[0] };
+    }
+
     async function renderSunset(now) {
         try {
-            const sunset = await fetchSunset(now);
-            const sunsetMs = sunset.getTime();
-
-            const uniqGrids = [...new Set(SPOTS.map(s => s.grid))];
-            const gridResults = await Promise.all(uniqGrids.map(g => fetchGrid(g).then(d => [g, d]).catch(() => [g, { skyCover: [], weather: [] }])));
-            const gridMap = Object.fromEntries(gridResults);
-            const tafMap = await fetchTAFs(SPOTS.map(s => s.taf));
-
-            const sec = Math.floor(sunsetMs / 1000);
-            const evaluated = SPOTS.map(s => {
-                const g = gridMap[s.grid];
-                const cloud = valueAt(g.skyCover, sunsetMs);
-                if (cloud == null) return null;
-                const blocker = blocking(valueAt(g.weather, sunsetMs));
-                const taf = classifyTAF(tafPeriodAt(tafMap[s.taf], sec));
-                let label = taf.verdict
-                    || (blocker ? blocker.weather.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase()) : verdictForCloud(cloud));
-                const grade = gradeFor(label);
-                let score = Math.abs(cloud - 40) + taf.score + (blocker && !taf.verdict ? 35 : 0);
-                return { ...s, cloud, label, grade, score };
-            }).filter(Boolean);
-            evaluated.sort((a, b) => (GRADE_RANK[a.grade] - GRADE_RANK[b.grade]) || (a.score - b.score));
-            const top = evaluated[0];
+            const { sunset, top } = await evaluateSunset(now);
 
             const gradeKey = top ? top.grade.replace('+', '\\+') : 'D';
             return `<section class="card rounded-xl p-4">
@@ -699,7 +710,7 @@
                 <div class="flex items-baseline justify-between mb-2 gap-2 whitespace-nowrap">
                     <div class="flex items-baseline gap-2 min-w-0">
                         <h2 class="text-lg font-semibold">Stargazing</h2>
-                        ${darkStartTxt ? `<span class="text-sm font-semibold text-slate-200">${darkStartTxt}</span>` : ''}
+                        ${darkStartTxt ? `<span class="text-lg font-semibold" style="color:#a78bfa">${darkStartTxt}</span>` : ''}
                     </div>
                     <a class="section-link flex-shrink-0" href="https://samiprehn.github.io/stargaze/" target="_blank" rel="noopener">full site ↗</a>
                 </div>
@@ -779,7 +790,10 @@
     }
 
     async function renderWeekendPrep() {
-        const sat = nextDayOfWeek(6);
+        const today = new Date();
+        const isSat = today.getDay() === 6;
+        // On Saturday, Sat = today's date; otherwise Sat = upcoming Saturday.
+        const sat = isSat ? (() => { const d = new Date(today); d.setHours(12,0,0,0); return d; })() : nextDayOfWeek(6);
         const sun = nextDayOfWeek(0);
 
         // Dog beaches: Open-Meteo daily highs + noon humidity per beach
@@ -813,6 +827,37 @@
         const satMkts = MARKETS.filter(m => m.day === 6 && isMarketActive(m, sat));
         const sunMkts = MARKETS.filter(m => m.day === 0 && isMarketActive(m, sun));
         const mktList = (mkts) => mkts.map(m => `<li class="text-sm"><span class="font-medium">${m.name}</span> ${m.dogFriendly ? '🐕' : ''} <span class="text-slate-400">· ${m.hours}</span></li>`).join('');
+
+        // Best sunset night: Sat vs Sun, only on Saturday (today vs tomorrow)
+        let sunsetBlock = '';
+        if (isSat) {
+            try {
+                const [satEval, sunEval] = await Promise.all([
+                    evaluateSunset(sat),
+                    evaluateSunset(sun),
+                ]);
+                const satRank = satEval.top ? GRADE_RANK[satEval.top.grade] : 99;
+                const sunRank = sunEval.top ? GRADE_RANK[sunEval.top.grade] : 99;
+                const winner = satRank <= sunRank
+                    ? { night: 'Saturday', sunset: satEval.sunset, top: satEval.top }
+                    : { night: 'Sunday',   sunset: sunEval.sunset, top: sunEval.top };
+                if (winner.top) {
+                    const gradeKey = winner.top.grade.replace('+', '\\+');
+                    sunsetBlock = `<div class="rounded-lg p-3 bg-slate-700/30 mb-3">
+                        <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Best sunset night</div>
+                        <div class="flex items-baseline justify-between">
+                            <div>
+                                <div class="font-semibold">${winner.night} · ${winner.top.name}</div>
+                                <div class="text-xs text-slate-400 mt-0.5">${winner.top.label} · ${winner.top.cloud}% clouds · ${fmtTime(winner.sunset)}</div>
+                            </div>
+                            <div class="text-3xl font-bold leading-none grade-${gradeKey}">${winner.top.grade}</div>
+                        </div>
+                    </div>`;
+                }
+            } catch (e) {
+                sunsetBlock = `<div class="text-slate-400 text-sm mb-3">Sunset forecast unavailable: ${e.message}</div>`;
+            }
+        }
 
         // Best stargazing: Sat vs Sun, top site of each
         let starBlock = '';
@@ -876,6 +921,7 @@
                 </div>
             </div>
 
+            ${sunsetBlock}
             ${starBlock}
         </section>`;
     }
