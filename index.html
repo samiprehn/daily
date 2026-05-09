@@ -26,9 +26,9 @@
 </head>
 <body>
     <div class="container mx-auto px-4 py-6 max-w-3xl">
-        <header class="mb-5">
-            <h1 class="text-3xl font-bold" id="dateLine">Today</h1>
-            <p class="text-base text-slate-300 mt-1" id="timeLine"></p>
+        <header class="mb-5 flex items-baseline gap-3 flex-wrap">
+            <span id="timeLine" class="text-3xl font-bold tracking-tight"></span>
+            <span id="dateLine" class="text-sm text-slate-400"></span>
         </header>
         <!-- Shared SVG defs for the sun-horizon scene -->
         <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -583,12 +583,14 @@
                         <div class="label">${s.label} · ${ZIPS[s.zip].name}</div>
                         <div class="text-2xl">${weatherEmoji(code)}</div>
                     </div>
-                    <div class="text-2xl font-bold mt-0.5">${temp}°<span class="text-sm text-slate-400 font-normal ml-1">feels ${feel}°</span></div>
-                    <div class="text-xs text-slate-300 mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
-                        <span>💨 ${wSpeed} ${wDir}</span>
-                        <span>💧 ${hum}%</span>
-                        ${s.uv && uv != null ? `<span style="color:${uvL.color}">☀ UV ${uv} ${uvL.label}</span>` : ''}
+                    <div class="flex items-baseline justify-between flex-wrap gap-x-3 gap-y-1 mt-0.5">
+                        <div class="text-2xl font-bold whitespace-nowrap">${temp}°<span class="text-sm text-slate-400 font-normal ml-1">feels ${feel}°</span></div>
+                        <div class="text-xs text-slate-300 whitespace-nowrap">
+                            <span>💨 ${wSpeed} ${wDir}</span>
+                            <span class="ml-2">💧 ${hum}%</span>
+                        </div>
                     </div>
+                    ${s.uv && uv != null ? `<div class="text-xs mt-1" style="color:${uvL.color}">☀ UV ${uv} ${uvL.label}</div>` : ''}
                 </div>`;
             }).join('');
 
@@ -642,7 +644,7 @@
                         <h2 class="text-lg font-semibold">Sunset</h2>
                         <span class="text-lg font-semibold" style="color:#fbbf24">${fmtTime(sunset)}</span>
                     </div>
-                    <a class="section-link" href="https://samiprehn.github.io/sd-sunset/" target="_blank" rel="noopener">all spots ↗</a>
+                    <a class="section-link" href="https://samiprehn.github.io/sd-sunset/" target="_blank" rel="noopener">full site ↗</a>
                 </div>
                 ${top ? `
                     <div class="flex items-center justify-between gap-4">
@@ -694,12 +696,12 @@
             const coreUp = top && galacticCoreVisible(top.lat, top.lon, top.darkStart, top.darkEnd);
             const darkStartTxt = top.darkStart ? fmtTime(new Date(top.darkStart)) : null;
             return `<section class="card rounded-xl p-4">
-                <div class="flex items-baseline justify-between mb-2">
-                    <div class="flex items-baseline gap-3">
-                        <h2 class="text-lg font-semibold">Stargazing tonight</h2>
-                        ${darkStartTxt ? `<span class="text-sm text-slate-400">starting at <span class="font-semibold text-slate-200">${darkStartTxt}</span></span>` : ''}
+                <div class="flex items-baseline justify-between mb-2 gap-2 whitespace-nowrap">
+                    <div class="flex items-baseline gap-2 min-w-0">
+                        <h2 class="text-lg font-semibold">Stargazing</h2>
+                        ${darkStartTxt ? `<span class="text-sm font-semibold text-slate-200">${darkStartTxt}</span>` : ''}
                     </div>
-                    <a class="section-link" href="https://samiprehn.github.io/stargaze/" target="_blank" rel="noopener">all sites ↗</a>
+                    <a class="section-link flex-shrink-0" href="https://samiprehn.github.io/stargaze/" target="_blank" rel="noopener">full site ↗</a>
                 </div>
                 <div class="flex items-center justify-between gap-4">
                     <div class="flex-1 min-w-0">
@@ -770,7 +772,7 @@
         return `<section class="card rounded-xl p-4">
             <div class="flex items-baseline justify-between mb-1">
                 <h2 class="text-lg font-semibold">Farmers markets today</h2>
-                <a class="section-link" href="https://samiprehn.github.io/sd_farmers_markets/" target="_blank" rel="noopener">all markets ↗</a>
+                <a class="section-link" href="https://samiprehn.github.io/sd_farmers_markets/" target="_blank" rel="noopener">full site ↗</a>
             </div>
             <div>${rows}</div>
         </section>`;
@@ -845,7 +847,7 @@
             <div class="mb-4">
                 <div class="flex items-baseline justify-between mb-2">
                     <div class="label">Dog beaches</div>
-                    <a class="section-link" href="https://samiprehn.github.io/sd_dog_beaches/" target="_blank" rel="noopener">all dog beaches ↗</a>
+                    <a class="section-link" href="https://samiprehn.github.io/sd_dog_beaches/" target="_blank" rel="noopener">full site ↗</a>
                 </div>
                 <div class="overflow-x-auto">
                     <table class="w-full">
