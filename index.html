@@ -966,7 +966,7 @@
                         const stateName = comp.status?.type?.state || 'pre';
                         const myScore = parseInt(me.score) || 0;
                         const oppScore = parseInt(opp.score) || 0;
-                        const myLabel = me.team.shortDisplayName || me.team.name || userTeam.name;
+                        const myLabel = userTeam.name;
                         const oppLabel = opp.team.shortDisplayName || opp.team.abbreviation || 'Opp';
                         let summary;
                         if (stateName === 'pre') {
