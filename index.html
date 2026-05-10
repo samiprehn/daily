@@ -941,10 +941,11 @@
                 const comp = ev.competitions && ev.competitions[0];
                 if (!comp) continue;
                 const competitors = comp.competitors || [];
-                // SD Wave's ESPN team id is 21422 (also matches "Wave" in shortDisplayName)
+                // Match the SD Wave by checking for "San Diego" in displayName/location
+                // (the only NWSL team based in SD).
                 const wave = competitors.find(c => c.team && (
-                    String(c.team.id) === '21422'
-                    || (c.team.shortDisplayName || '').toLowerCase().includes('wave')
+                    (c.team.location || '').toLowerCase().includes('san diego')
+                    || (c.team.displayName || '').toLowerCase().includes('san diego')
                 ));
                 if (!wave) continue;
                 const opp = competitors.find(c => c !== wave);
@@ -967,7 +968,7 @@
                 }
                 return `<section class="card rounded-xl p-3">
                     <div class="flex items-baseline justify-between gap-2 flex-wrap">
-                        <h2 class="text-lg font-semibold">SD Wave</h2>
+                        <h2 class="text-lg font-semibold">Wave FC</h2>
                         <span class="text-sm">${summary}</span>
                     </div>
                 </section>`;
