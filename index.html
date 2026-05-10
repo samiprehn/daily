@@ -768,8 +768,10 @@
 
         // ── SD-only sections: farmers markets + weekend prep ─────────
         if (inSD) {
-            // Farmers markets today (skip on weekends — handled by weekend prep)
-            if (!isWeekend) {
+            // Farmers markets today: skip on Saturday only (weekend prep covers
+            // Sat/Sun markets that day). Sunday still shows today's markets
+            // because weekend prep is hidden then.
+            if (dow !== 6) {
                 sections.push(await renderFarmers(now));
             }
             // Weekend prep (every day except Sunday)
