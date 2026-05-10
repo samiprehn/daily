@@ -644,7 +644,7 @@
         const teamsGroup = `
             <fieldset class="rounded-lg border border-slate-700 p-4">
                 <legend class="px-2 text-xs uppercase tracking-wide text-slate-400">Favorite sports teams (optional)</legend>
-                <input name="teams" type="text" value="${(ex.teams || []).map(t => t.shortName || t.name).join(', ').replace(/"/g, '&quot;')}"
+                <input name="teams" type="text" value="${(ex.teams || []).map(t => t.name).join(', ').replace(/"/g, '&quot;')}"
                     class="w-full px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400"
                     placeholder="Padres, Wave FC, Lakers">
                 <p class="text-xs text-slate-500 mt-2">Comma-separated. Looks across MLB, NFL, NBA, NHL, WNBA, NWSL, MLS via ESPN.</p>
@@ -689,11 +689,7 @@
                 }
                 const teamsRaw = (f.teams ? f.teams.value.trim() : '');
                 const teamNames = teamsRaw ? teamsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
-                const teams = [];
-                for (const name of teamNames) {
-                    try { teams.push(await searchSportsTeam(name)); }
-                    catch (e) { /* skip not-found teams silently */ }
-                }
+                const teams = teamNames.map(name => ({ name }));
                 saveLocations({
                     home: { ...home, ...homeParts, label: 'Home' },
                     work: { ...work, ...workParts, label: 'Work' },
@@ -922,6 +918,10 @@
     }
 
     // ── Sports (ESPN) ────────────────────────────────────────────────
+    // ESPN's site.api scoreboard endpoint sends CORS headers but the teams
+    // endpoint does NOT, so we can't look up team IDs at setup time. Instead
+    // we save the user's typed names verbatim and, at render time, query each
+    // supported league's scoreboard for today and match by name.
     const ESPN_LEAGUES = [
         { sport: 'baseball',   league: 'mlb' },
         { sport: 'football',   league: 'nfl' },
@@ -931,63 +931,33 @@
         { sport: 'soccer',     league: 'usa.nwsl' },
         { sport: 'soccer',     league: 'usa.1' }, // MLS
     ];
-    const _teamsCache = {};
-    async function fetchLeagueTeams(sport, league) {
-        const key = `${sport}/${league}`;
-        if (_teamsCache[key]) return _teamsCache[key];
-        try {
-            const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${sport}/${league}/teams`);
-            if (!r.ok) return [];
-            const data = await r.json();
-            _teamsCache[key] = (data?.sports?.[0]?.leagues?.[0]?.teams || []).map(t => t.team);
-            return _teamsCache[key];
-        } catch (e) { return []; }
-    }
-    async function searchSportsTeam(name) {
-        const lower = name.toLowerCase();
-        for (const lg of ESPN_LEAGUES) {
-            const teams = await fetchLeagueTeams(lg.sport, lg.league);
-            for (const t of teams) {
-                const candidates = [t.displayName, t.name, t.shortDisplayName, t.location, t.abbreviation]
-                    .filter(Boolean).map(s => s.toLowerCase());
-                if (candidates.some(c => c === lower || c.includes(lower) || lower.includes(c))) {
-                    return {
-                        name: t.displayName,
-                        shortName: t.shortDisplayName || t.name || t.displayName,
-                        sport: lg.sport,
-                        league: lg.league,
-                        id: String(t.id),
-                    };
-                }
-            }
-        }
-        throw new Error(`Team not found: ${name}`);
+
+    function teamMatches(competitorTeam, userName) {
+        if (!competitorTeam) return false;
+        const lower = userName.toLowerCase();
+        const candidates = [
+            competitorTeam.displayName, competitorTeam.name, competitorTeam.shortDisplayName,
+            competitorTeam.location, competitorTeam.abbreviation,
+        ].filter(Boolean).map(s => s.toLowerCase());
+        return candidates.some(c => c === lower || c.includes(lower) || lower.includes(c));
     }
 
     async function renderSports(now) {
         const teams = LOCATIONS.teams || [];
         if (!teams.length) return '';
         const dateStr = pacificISODate(now).replace(/-/g, '');
-        // Group by league to share scoreboard fetches
-        const byLeague = {};
-        for (const team of teams) {
-            const key = `${team.sport}/${team.league}`;
-            if (!byLeague[key]) byLeague[key] = { sport: team.sport, league: team.league, teams: [] };
-            byLeague[key].teams.push(team);
-        }
         const lines = [];
-        await Promise.all(Object.values(byLeague).map(async grp => {
+        await Promise.all(ESPN_LEAGUES.map(async lg => {
             try {
-                const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${grp.sport}/${grp.league}/scoreboard?dates=${dateStr}`);
+                const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${lg.sport}/${lg.league}/scoreboard?dates=${dateStr}`);
                 if (!r.ok) return;
                 const data = await r.json();
-                const events = data.events || [];
-                for (const team of grp.teams) {
-                    for (const ev of events) {
-                        const comp = ev.competitions?.[0];
-                        if (!comp) continue;
-                        const competitors = comp.competitors || [];
-                        const me = competitors.find(c => String(c.team?.id) === team.id);
+                for (const ev of data.events || []) {
+                    const comp = ev.competitions?.[0];
+                    if (!comp) continue;
+                    const competitors = comp.competitors || [];
+                    for (const userTeam of teams) {
+                        const me = competitors.find(c => teamMatches(c.team, userTeam.name));
                         if (!me) continue;
                         const opp = competitors.find(c => c !== me);
                         if (!opp) continue;
@@ -996,6 +966,7 @@
                         const stateName = comp.status?.type?.state || 'pre';
                         const myScore = parseInt(me.score) || 0;
                         const oppScore = parseInt(opp.score) || 0;
+                        const myLabel = me.team.shortDisplayName || me.team.name || userTeam.name;
                         const oppLabel = opp.team.shortDisplayName || opp.team.abbreviation || 'Opp';
                         let summary;
                         if (stateName === 'pre') {
@@ -1007,7 +978,7 @@
                             const result = myScore > oppScore ? 'beat' : myScore < oppScore ? 'lost to' : 'tied';
                             summary = `${result} ${oppLabel} <span class="font-semibold">${myScore}–${oppScore}</span>`;
                         }
-                        lines.push(`<li><span class="font-semibold">${team.shortName}</span> <span class="text-slate-300">${summary}</span></li>`);
+                        lines.push(`<li><span class="font-semibold">${myLabel}</span> <span class="text-slate-300">${summary}</span></li>`);
                     }
                 }
             } catch (e) { /* skip league on error */ }
