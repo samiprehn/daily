@@ -497,16 +497,34 @@
         return date.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
     }
     const _solarCache = {};
-    async function fetchSolar(date) {
+    async function fetchSolar(date, lat = SD_LAT, lon = SD_LON) {
         const iso = pacificISODate(date);
-        if (_solarCache[iso]) return _solarCache[iso];
-        const r = await fetch(`https://api.sunrise-sunset.org/json?lat=${SD_LAT}&lng=${SD_LON}&date=${iso}&formatted=0`);
+        const key = `${lat.toFixed(2)},${lon.toFixed(2)}|${iso}`;
+        if (_solarCache[key]) return _solarCache[key];
+        const r = await fetch(`https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lon}&date=${iso}&formatted=0`);
         const d = await r.json();
         const out = { sunrise: new Date(d.results.sunrise), sunset: new Date(d.results.sunset) };
-        _solarCache[iso] = out;
+        _solarCache[key] = out;
         return out;
     }
     async function fetchSunset(date) { return (await fetchSolar(date)).sunset; }
+
+    function isInSDCounty(loc) {
+        if (!loc || typeof loc.lat !== 'number') return false;
+        // Approximate SD County bounding box.
+        return loc.lat >= 32.53 && loc.lat <= 33.51
+            && loc.lon >= -117.60 && loc.lon <= -116.10;
+    }
+    function astroTwilightEnd(date, lat, lon) {
+        // Sample minute-by-minute from local noon for 12 hours; first time
+        // sun altitude is below -18° is the start of astronomical dark.
+        const noon = new Date(date); noon.setHours(12, 0, 0, 0);
+        for (let m = 0; m < 12 * 60; m++) {
+            const t = new Date(noon.getTime() + m * 60000);
+            if (sunAltitude(t, lat, lon) * (180 / PI) < -18) return t;
+        }
+        return null;
+    }
 
     // ── Helpers ───────────────────────────────────────────────────────
     function fmtTime(d) {
@@ -711,6 +729,7 @@
     // ── Main ──────────────────────────────────────────────────────────
     async function run() {
         if (!LOCATIONS) { renderSetup(); return; }
+        const inSD = isInSDCounty(LOCATIONS.home) || isInSDCounty(LOCATIONS.work);
         const now = new Date();
         const dow = now.getDay();
         const isWeekend = dow === 0 || dow === 6;
@@ -742,19 +761,21 @@
 
         // ── Sunrise + Sunset ──────────────────────────────────────────
         sections.push(await renderSunrise(now));
-        sections.push(await renderSunset(now));
+        sections.push(inSD ? await renderSunset(now) : await renderSunsetSimple(now));
 
         // ── Stargazing tonight ────────────────────────────────────────
-        sections.push(await renderStargaze(now));
+        sections.push(inSD ? await renderStargaze(now) : await renderStargazeSimple(now));
 
-        // ── Farmers markets today (skip on weekends — handled by weekend prep) ─
-        if (!isWeekend) {
-            sections.push(await renderFarmers(now));
-        }
-
-        // ── Weekend prep (if not Sunday) ──────────────────────────────
-        if (showWeekendPrep) {
-            sections.push(await renderWeekendPrep());
+        // ── SD-only sections: farmers markets + weekend prep ─────────
+        if (inSD) {
+            // Farmers markets today (skip on weekends — handled by weekend prep)
+            if (!isWeekend) {
+                sections.push(await renderFarmers(now));
+            }
+            // Weekend prep (every day except Sunday)
+            if (showWeekendPrep) {
+                sections.push(await renderWeekendPrep());
+            }
         }
 
         document.getElementById('content').innerHTML = sections.join('');
@@ -844,6 +865,57 @@
             </section>`;
         } catch (e) {
             return `<section class="card rounded-xl p-3"><h2 class="text-lg font-semibold">Sunrise</h2><span class="text-sm text-slate-400">${e.message}</span></section>`;
+        }
+    }
+
+    async function renderSunsetSimple(now) {
+        try {
+            const home = LOCATIONS.home;
+            const { sunset } = await fetchSolar(now, home.lat, home.lon);
+            return `<section class="card rounded-xl p-4">
+                <div class="flex items-center justify-between gap-4">
+                    <div class="flex items-baseline gap-3">
+                        <h2 class="text-lg font-semibold">Sunset</h2>
+                        <span class="text-lg font-semibold" style="color:#fbbf24">${fmtTime(sunset)}</span>
+                    </div>
+                    <svg id="sunHorizon" viewBox="0 0 100 70" aria-hidden="true" style="width:80px;height:56px;filter:drop-shadow(0 2px 8px rgba(0,0,0,0.35));">
+                        <rect x="0" y="0" width="100" height="55" rx="6" fill="url(#dailySky)"/>
+                        <circle id="sunDisc" cx="50" cy="60" r="13" fill="url(#dailySun)" clip-path="url(#dailySkyClip)"/>
+                        <line x1="0" y1="55" x2="100" y2="55" stroke="rgba(0,0,0,0.55)" stroke-width="1.6"/>
+                    </svg>
+                </div>
+            </section>`;
+        } catch (e) {
+            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Sunset</h2><p class="text-slate-400 text-sm">${e.message}</p></section>`;
+        }
+    }
+
+    async function renderStargazeSimple(now) {
+        try {
+            const home = LOCATIONS.home;
+            const darkStart = astroTwilightEnd(now, home.lat, home.lon);
+            const illum = moonIllumination(now);
+            const phase = moonPhaseLabel(illum, now);
+            const moonText = (() => {
+                const p = phase.toLowerCase();
+                if (p.includes('waxing') || p.includes('first')) return 'waxing';
+                if (p.includes('waning') || p.includes('last')) return 'waning';
+                return p;
+            })();
+            return `<section class="card rounded-xl p-4">
+                <div class="flex items-baseline justify-between mb-2">
+                    <div class="flex items-baseline gap-3">
+                        <h2 class="text-lg font-semibold">Stargazing</h2>
+                        ${darkStart ? `<span class="text-lg font-semibold" style="color:#a78bfa">${fmtTime(darkStart)}</span>` : ''}
+                    </div>
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                    <div class="text-sm text-slate-300">moon ${moonText}</div>
+                    <svg id="moonIcon" viewBox="-30 -30 60 60" aria-label="moon phase" style="width:44px;height:44px;filter:drop-shadow(0 0 6px rgba(243,236,214,0.45));"></svg>
+                </div>
+            </section>`;
+        } catch (e) {
+            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Stargazing</h2></section>`;
         }
     }
 
