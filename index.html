@@ -1012,7 +1012,40 @@
         // Markets Sat/Sun
         const satMkts = MARKETS.filter(m => m.day === 6 && isMarketActive(m, sat));
         const sunMkts = MARKETS.filter(m => m.day === 0 && isMarketActive(m, sun));
-        const mktList = (mkts) => mkts.map(m => `<li class="text-sm"><span class="font-medium">${m.name}</span> ${m.dogFriendly ? '🐕' : ''} <span class="text-slate-400">· ${m.hours}</span></li>`).join('');
+
+        // Fetch weather for all unique market ZIPs across the weekend in parallel
+        const mktZips = [...new Set([...satMkts, ...sunMkts].map(m => m.zip))];
+        await Promise.all(mktZips.map(z => {
+            const c = MARKET_ZIP_COORDS[z];
+            return c ? fetchMeteo(c[0], c[1]).catch(() => null) : null;
+        }));
+
+        const mktItem = (m, date) => {
+            const c = MARKET_ZIP_COORDS[m.zip];
+            const meteo = c ? meteoCache[`${c[0]},${c[1]}`] : null;
+            const oh = getOpenHours(m, date);
+            let weatherBit = '';
+            if (meteo && oh) {
+                const midHour = Math.round((oh.open + oh.close) / 2);
+                const idx = indexAt(meteo.hourly, date, midHour);
+                if (idx >= 0) {
+                    const apparent = Math.round(meteo.hourly.apparent_temperature[idx]);
+                    const code = meteo.hourly.weather_code[idx];
+                    const uv = Math.round(meteo.hourly.uv_index[idx]);
+                    const uvL = uvLabel(uv);
+                    weatherBit = `<span>${weatherEmoji(code)}</span> <span>${apparent}°</span>${uvL ? ` <span class="text-xs" style="color:${uvL.color}">UV ${uv}</span>` : ''}`;
+                }
+            }
+            return `<li class="flex items-baseline gap-2 py-0.5">
+                <div class="flex-1 min-w-0">
+                    <span class="text-sm font-medium">${m.name}</span>${m.dogFriendly ? ' <span class="text-xs">🐕</span>' : ''}
+                    <span class="text-xs text-slate-400 ml-1">${m.hours}</span>
+                </div>
+                <div class="text-sm flex items-baseline gap-1 flex-shrink-0">${weatherBit}</div>
+            </li>`;
+        };
+        const satMktList = satMkts.map(m => mktItem(m, sat)).join('');
+        const sunMktList = sunMkts.map(m => mktItem(m, sun)).join('');
 
         // Best sunset night: Sat vs Sun, only on Saturday (today vs tomorrow)
         let sunsetBlock = '';
@@ -1099,11 +1132,11 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
                 <div>
                     <div class="label mb-1">Saturday markets</div>
-                    <ul class="space-y-1">${mktList(satMkts) || '<li class="text-xs text-slate-500">none</li>'}</ul>
+                    <ul class="space-y-1">${satMktList || '<li class="text-xs text-slate-500">none</li>'}</ul>
                 </div>
                 <div>
                     <div class="label mb-1">Sunday markets</div>
-                    <ul class="space-y-1">${mktList(sunMkts) || '<li class="text-xs text-slate-500">none</li>'}</ul>
+                    <ul class="space-y-1">${sunMktList || '<li class="text-xs text-slate-500">none</li>'}</ul>
                 </div>
             </div>
 
