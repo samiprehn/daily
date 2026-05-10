@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Daily</title>
+    <title>Dashboard</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📋</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -492,12 +492,17 @@
         // 'en-CA' formats as YYYY-MM-DD; 'America/Los_Angeles' picks the Pacific calendar day
         return date.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
     }
-    async function fetchSunset(date) {
+    const _solarCache = {};
+    async function fetchSolar(date) {
         const iso = pacificISODate(date);
+        if (_solarCache[iso]) return _solarCache[iso];
         const r = await fetch(`https://api.sunrise-sunset.org/json?lat=${SD_LAT}&lng=${SD_LON}&date=${iso}&formatted=0`);
         const d = await r.json();
-        return new Date(d.results.sunset);
+        const out = { sunrise: new Date(d.results.sunrise), sunset: new Date(d.results.sunset) };
+        _solarCache[iso] = out;
+        return out;
     }
+    async function fetchSunset(date) { return (await fetchSolar(date)).sunset; }
 
     // ── Helpers ───────────────────────────────────────────────────────
     function fmtTime(d) {
@@ -651,7 +656,8 @@
             sections.push(await renderCommute(now));
         }
 
-        // ── Sunset ────────────────────────────────────────────────────
+        // ── Sunrise + Sunset ──────────────────────────────────────────
+        sections.push(await renderSunrise(now));
         sections.push(await renderSunset(now));
 
         // ── Stargazing tonight ────────────────────────────────────────
@@ -738,6 +744,20 @@
             </section>`;
         } catch (e) {
             return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Weather</h2><p class="text-slate-400 text-sm mt-2">Couldn't load: ${e.message}</p></section>`;
+        }
+    }
+
+    async function renderSunrise(now) {
+        try {
+            const { sunrise } = await fetchSolar(now);
+            return `<section class="card rounded-xl p-3">
+                <div class="flex items-baseline justify-between">
+                    <h2 class="text-lg font-semibold">Sunrise</h2>
+                    <span class="text-lg font-semibold" style="color:#fcd34d">${fmtTime(sunrise)}</span>
+                </div>
+            </section>`;
+        } catch (e) {
+            return `<section class="card rounded-xl p-3"><h2 class="text-lg font-semibold">Sunrise</h2><span class="text-sm text-slate-400">${e.message}</span></section>`;
         }
     }
 
@@ -875,7 +895,6 @@
                 <div class="flex items-center justify-between gap-4">
                     <div class="flex-1 min-w-0">
                         <div class="text-xl font-semibold">${top.name}</div>
-                        <div class="text-xs text-slate-400 mt-0.5"><span class="px-1.5 py-0.5 rounded pill-bortle-${top.bortle}">B${top.bortle}</span> · ${top.driveMin} min drive</div>
                     </div>
                     <div class="flex items-center gap-3 flex-shrink-0">
                         <svg id="moonIcon" viewBox="-30 -30 60 60" aria-label="moon phase" style="width:44px;height:44px;filter:drop-shadow(0 0 6px rgba(243,236,214,0.45));"></svg>
@@ -885,7 +904,7 @@
                 <div class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                     <div><span class="label">clear-dark</span> <span class="ml-1 font-semibold">${top.clearDarkH.toFixed(1)}h</span></div>
                     <div><span class="label">avg cloud</span> <span class="ml-1 font-semibold">${top.avgCloud != null ? Math.round(top.avgCloud) + '%' : '—'}</span></div>
-                    <div><span class="label">moon</span> <span class="ml-1 font-semibold">${Math.round(illum*100)}% ${phase.toLowerCase()}</span></div>
+                    <div><span class="label">moon</span> <span class="ml-1 font-semibold">${phase.toLowerCase().includes('waxing') ? 'waxing' : phase.toLowerCase().includes('waning') ? 'waning' : phase.toLowerCase()}</span></div>
                     <div><span class="label">moon up</span> <span class="ml-1 font-semibold">${top.moonUpDuringDarkH.toFixed(1)}h</span></div>
                 </div>
                 ${coreUp ? `<div class="text-xs mt-2" style="color:#c4b5fd">✨ Galactic core above 20° during the dark window</div>` : ''}
@@ -964,6 +983,15 @@
             const noonIdx = indexAt(meteo.hourly, date, 12);
             if (dIdx < 0) return `<tr class="${extraClass}"><td class="px-2 py-1 text-xs text-slate-500" colspan="5">${b.name} ${dayLabel} —</td></tr>`;
             const high = Math.round(meteo.daily.temperature_2m_max[dIdx]);
+            // Find the hour that produced the daily high, then read apparent_temperature at that hour
+            const dateStr = pacificISODate(date);
+            let peakIdx = -1, peakTemp = -Infinity;
+            for (let i = 0; i < meteo.hourly.time.length; i++) {
+                if (!meteo.hourly.time[i].startsWith(dateStr)) continue;
+                const t = meteo.hourly.temperature_2m[i];
+                if (t > peakTemp) { peakTemp = t; peakIdx = i; }
+            }
+            const feel = peakIdx >= 0 ? Math.round(meteo.hourly.apparent_temperature[peakIdx]) : null;
             // Match sd_dog_beaches: use the noon-hour weather_code, not the daily aggregate
             const code = noonIdx >= 0 ? meteo.hourly.weather_code[noonIdx] : meteo.daily.weather_code[dIdx];
             const wind = noonIdx >= 0 ? Math.round(meteo.hourly.wind_speed_10m[noonIdx]) : Math.round(meteo.daily.wind_speed_10m_max[dIdx]);
@@ -971,7 +999,7 @@
             return `<tr class="${extraClass}">
                 <td class="px-2 py-1 text-xs text-slate-400">${dayLabel}</td>
                 <td class="px-2 py-1 text-sm font-medium">${b.name}</td>
-                <td class="px-2 py-1 text-sm whitespace-nowrap"><span>${beachWeatherEmoji(code)}</span> <span class="font-semibold">${high}°</span></td>
+                <td class="px-2 py-1 text-sm whitespace-nowrap"><span>${beachWeatherEmoji(code)}</span> <span class="font-semibold">${high}°</span>${feel != null ? `<span class="text-xs text-slate-400 ml-1">feels ${feel}°</span>` : ''}</td>
                 <td class="px-2 py-1 text-sm whitespace-nowrap">${wind} mph</td>
                 <td class="px-2 py-1 text-sm whitespace-nowrap">${hum != null ? hum + '%' : '—'}</td>
             </tr>`;
