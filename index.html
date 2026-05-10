@@ -26,7 +26,7 @@
 </head>
 <body>
     <div class="container mx-auto px-4 py-6 max-w-3xl">
-        <header class="mb-5 flex items-baseline gap-2 flex-wrap">
+        <header class="mb-5 flex items-baseline gap-2 flex-wrap justify-center text-center">
             <span class="text-xl font-semibold text-slate-100">Dashboard</span>
             <span class="text-slate-500">·</span>
             <span id="dateLine" class="text-xl font-semibold"></span>
@@ -52,8 +52,10 @@
         <div id="content" class="space-y-4">
             <div class="card rounded-xl p-4 text-slate-400">Loading…</div>
         </div>
-        <div class="text-center mt-6 mb-2">
-            <button id="editLocationsBtn" class="text-xs text-slate-500 hover:text-slate-300 underline-offset-2 hover:underline">edit locations</button>
+        <div class="text-center mt-6 mb-2 text-xs text-slate-500">
+            <button id="editLocationsBtn" class="hover:text-slate-300 underline-offset-2 hover:underline">edit locations</button>
+            <span class="mx-2 opacity-60">|</span>
+            <a href="https://samiprehn.github.io/" target="_blank" rel="noopener noreferrer" class="hover:text-slate-300 underline-offset-2 hover:underline">Sami's other sites →</a>
         </div>
     </div>
 
