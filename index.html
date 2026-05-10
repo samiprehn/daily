@@ -565,15 +565,25 @@
     }
 
     // ── Setup view ────────────────────────────────────────────────────
-    function renderSetup(error = '') {
+    function renderSetup(error = '', existing = null) {
         const content = document.getElementById('content');
-        const fieldGroup = (kind, displayName) => `
+        const ex = existing || {};
+        const sched = ex.schedule || {};
+        const fieldGroup = (kind, displayName) => {
+            const cur = ex[kind] || {};
+            // Try to parse a previously stored address back into parts. Best-effort.
+            const m = cur.address ? cur.address.match(/^(.+?),\s*(.+?),\s*([A-Z]{2})\s+(\d{5})/) : null;
+            const street = cur.street || (m ? m[1] : '');
+            const city   = cur.city   || (m ? m[2] : '');
+            const state  = cur.state  || (m ? m[3] : '');
+            const zip    = cur.zip    || (m ? m[4] : '');
+            return `
             <fieldset class="rounded-lg border border-slate-700 p-4">
                 <legend class="px-2 text-xs uppercase tracking-wide text-slate-400">${displayName}</legend>
                 <div class="space-y-3">
                     <label class="block">
                         <span class="text-xs text-slate-400">Street</span>
-                        <input name="${kind}_street" type="text" required
+                        <input name="${kind}_street" type="text" required value="${street}"
                             autocomplete="section-${kind} address-line1"
                             class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400"
                             placeholder="123 Main St">
@@ -581,34 +591,57 @@
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <label class="block">
                             <span class="text-xs text-slate-400">City</span>
-                            <input name="${kind}_city" type="text" required
+                            <input name="${kind}_city" type="text" required value="${city}"
                                 autocomplete="section-${kind} address-level2"
                                 class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
                         </label>
                         <label class="block">
                             <span class="text-xs text-slate-400">State</span>
-                            <input name="${kind}_state" type="text" required maxlength="2"
+                            <input name="${kind}_state" type="text" required maxlength="2" value="${state}"
                                 autocomplete="section-${kind} address-level1"
                                 class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400 uppercase"
                                 placeholder="CA">
                         </label>
                         <label class="block">
                             <span class="text-xs text-slate-400">ZIP</span>
-                            <input name="${kind}_zip" type="text" required inputmode="numeric"
+                            <input name="${kind}_zip" type="text" required inputmode="numeric" value="${zip}"
                                 autocomplete="section-${kind} postal-code"
                                 class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
                         </label>
                     </div>
                 </div>
             </fieldset>`;
+        };
+        const dayOpts = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+            .map((n, i) => `<option value="${i}" ${sched.trashDay == i ? 'selected' : ''}>${n}</option>`).join('');
+        const scheduleGroup = `
+            <fieldset class="rounded-lg border border-slate-700 p-4">
+                <legend class="px-2 text-xs uppercase tracking-wide text-slate-400">Pickup schedule (optional)</legend>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label class="block">
+                        <span class="text-xs text-slate-400">Trash day (weekly)</span>
+                        <select name="trash_day" class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
+                            <option value="">—</option>
+                            ${dayOpts}
+                        </select>
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-slate-400">Next recycling pickup</span>
+                        <input name="recycling_next" type="date" value="${sched.recyclingNext || ''}"
+                            class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
+                    </label>
+                </div>
+                <p class="text-xs text-slate-500 mt-2">Recycling cycles biweekly; enter any past or upcoming pickup date and the dashboard will compute the next one.</p>
+            </fieldset>`;
         content.innerHTML = `
             <section class="card rounded-xl p-5">
-                <h2 class="text-xl font-semibold mb-1">Set up your locations</h2>
-                <p class="text-sm text-slate-400 mb-4">Stored on this device only — never uploaded. You can edit later.</p>
+                <h2 class="text-xl font-semibold mb-1">${existing ? 'Edit your' : 'Set up your'} locations</h2>
+                <p class="text-sm text-slate-400 mb-4">Stored on this device only — never uploaded.</p>
                 ${error ? `<p class="text-sm text-red-400 mb-3">${error}</p>` : ''}
                 <form id="locForm" class="space-y-4">
                     ${fieldGroup('home', 'Home')}
                     ${fieldGroup('work', 'Work')}
+                    ${scheduleGroup}
                     <button type="submit" class="w-full py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium">Save</button>
                 </form>
             </section>`;
@@ -616,23 +649,31 @@
             e.preventDefault();
             const submitBtn = e.target.querySelector('button[type="submit"]');
             submitBtn.disabled = true;
-            submitBtn.textContent = 'Locating…';
+            submitBtn.textContent = 'Saving…';
             const f = e.target.elements;
-            const homeAddr = `${f.home_street.value.trim()}, ${f.home_city.value.trim()}, ${f.home_state.value.trim().toUpperCase()} ${f.home_zip.value.trim()}`;
-            const workAddr = `${f.work_street.value.trim()}, ${f.work_city.value.trim()}, ${f.work_state.value.trim().toUpperCase()} ${f.work_zip.value.trim()}`;
+            const homeParts = { street: f.home_street.value.trim(), city: f.home_city.value.trim(), state: f.home_state.value.trim().toUpperCase(), zip: f.home_zip.value.trim() };
+            const workParts = { street: f.work_street.value.trim(), city: f.work_city.value.trim(), state: f.work_state.value.trim().toUpperCase(), zip: f.work_zip.value.trim() };
+            const homeAddr = `${homeParts.street}, ${homeParts.city}, ${homeParts.state} ${homeParts.zip}`;
+            const workAddr = `${workParts.street}, ${workParts.city}, ${workParts.state} ${workParts.zip}`;
             try {
                 const [home, work] = await Promise.all([
                     geocodeAddress(homeAddr),
                     geocodeAddress(workAddr),
                 ]);
+                const trashDay = f.trash_day.value;
+                const recyclingNext = f.recycling_next.value;
                 saveLocations({
-                    home: { ...home, label: 'Home' },
-                    work: { ...work, label: 'Work' },
+                    home: { ...home, ...homeParts, label: 'Home' },
+                    work: { ...work, ...workParts, label: 'Work' },
+                    schedule: {
+                        trashDay: trashDay === '' ? null : Number(trashDay),
+                        recyclingNext: recyclingNext || null,
+                    },
                 });
                 LOCATIONS = loadLocations();
                 run();
             } catch (err) {
-                renderSetup(`Couldn't find one of those addresses: ${err.message}`);
+                renderSetup(`Couldn't find one of those addresses: ${err.message}`, ex);
             }
         });
     }
@@ -655,10 +696,16 @@
         // ── Weather slots ─────────────────────────────────────────────
         sections.push(await renderWeather(now, isWeekend));
 
+        // ── Trash / recycling pickup ─────────────────────────────────
+        sections.push(await renderTrash());
+
         // ── Commute (weekdays only) ──────────────────────────────────
         if (!isWeekend) {
             sections.push(await renderCommute(now));
         }
+
+        // ── Padres game today ─────────────────────────────────────────
+        sections.push(await renderPadres(now));
 
         // ── Sunrise + Sunset ──────────────────────────────────────────
         sections.push(await renderSunrise(now));
@@ -789,6 +836,83 @@
         }).filter(Boolean);
         evaluated.sort((a, b) => (GRADE_RANK[a.grade] - GRADE_RANK[b.grade]) || (a.score - b.score));
         return { sunset, top: evaluated[0] };
+    }
+
+    function daysUntilDayOfWeek(targetDow) {
+        const today = new Date();
+        const todayDow = today.getDay();
+        let diff = targetDow - todayDow;
+        if (diff < 0) diff += 7;
+        return diff;
+    }
+    function daysUntilRecycling(nextDateStr) {
+        if (!nextDateStr) return null;
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const target = new Date(nextDateStr + 'T00:00:00');
+        // Cycle biweekly until we land on or after today
+        while (target.getTime() < today.getTime()) target.setDate(target.getDate() + 14);
+        return Math.round((target - today) / 86400000);
+    }
+    function whenLabel(days) {
+        if (days === 0) return 'today';
+        if (days === 1) return 'tomorrow';
+        return `in ${days} days`;
+    }
+
+    async function renderTrash() {
+        const sched = LOCATIONS.schedule || {};
+        const tDays = sched.trashDay != null ? daysUntilDayOfWeek(sched.trashDay) : null;
+        const rDays = sched.recyclingNext ? daysUntilRecycling(sched.recyclingNext) : null;
+        if (tDays == null && rDays == null) return '';
+        const parts = [];
+        if (tDays != null) parts.push(`<div><span class="text-lg mr-1">🗑️</span><span class="font-semibold">Trash</span> <span class="text-slate-300">${whenLabel(tDays)}</span></div>`);
+        if (rDays != null) parts.push(`<div><span class="text-lg mr-1">♻️</span><span class="font-semibold">Recycling</span> <span class="text-slate-300">${whenLabel(rDays)}</span></div>`);
+        return `<section class="card rounded-xl p-3">
+            <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">${parts.join('')}</div>
+        </section>`;
+    }
+
+    async function renderPadres(now) {
+        try {
+            const dateStr = pacificISODate(now).replace(/-/g, '');
+            const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${dateStr}`);
+            if (!r.ok) return '';
+            const data = await r.json();
+            const events = data.events || [];
+            for (const ev of events) {
+                const comp = ev.competitions && ev.competitions[0];
+                if (!comp) continue;
+                const competitors = comp.competitors || [];
+                const sd = competitors.find(c => c.team && c.team.abbreviation === 'SD');
+                if (!sd) continue;
+                const opp = competitors.find(c => c.team && c.team.abbreviation !== 'SD');
+                const isHome = sd.homeAway === 'home';
+                const start = new Date(ev.date);
+                const stateName = (comp.status && comp.status.type && comp.status.type.state) || 'pre';
+                const sdScore = parseInt(sd.score) || 0;
+                const oppScore = parseInt(opp.score) || 0;
+                const oppAbbr = opp.team.abbreviation;
+                let summary;
+                if (stateName === 'pre') {
+                    summary = `${isHome ? 'vs' : '@'} ${oppAbbr} · <span class="font-semibold">${fmtTime(start)}</span>`;
+                } else if (stateName === 'in') {
+                    const detail = (comp.status.type.shortDetail || 'live');
+                    summary = `${isHome ? 'vs' : '@'} ${oppAbbr} · <span class="text-amber-300">${detail}</span> · <span class="font-semibold">${sdScore}–${oppScore}</span>`;
+                } else {
+                    const won = sdScore > oppScore;
+                    summary = `${won ? 'beat' : 'lost to'} ${oppAbbr} <span class="font-semibold">${sdScore}–${oppScore}</span>`;
+                }
+                return `<section class="card rounded-xl p-3">
+                    <div class="flex items-baseline justify-between gap-2 flex-wrap">
+                        <h2 class="text-lg font-semibold">⚾ Padres</h2>
+                        <span class="text-sm">${summary}</span>
+                    </div>
+                </section>`;
+            }
+            return '';
+        } catch (e) {
+            return '';
+        }
     }
 
     async function renderCommute(now) {
@@ -1152,9 +1276,7 @@
     }
 
     document.getElementById('editLocationsBtn').addEventListener('click', () => {
-        clearLocations();
-        LOCATIONS = null;
-        run();
+        renderSetup('', LOCATIONS);
     });
 
     run().catch(err => {

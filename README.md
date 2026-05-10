@@ -11,9 +11,11 @@ Personal daily-summary dashboard. **Not** linked from samiprehn.github.io.
   - Weekdays: 8am @ Home, noon @ Work (with UV), 5pm @ Home
   - Weekends: all slots @ Home
   - Tonight's low at Home
+- **Trash + recycling pickup** (if configured in setup): "🗑️ Trash today / tomorrow / in N days" + "♻️ Recycling …"
 - **Commute** (weekdays only): driving time with current traffic
   - Before noon: Home → Work
   - After noon: Work → Home
+- **Padres game today** (if there is one): vs/@ opponent, start time, or live score / final score. Pulled from ESPN's free MLB scoreboard.
 - **Sunset:** time, top viewpoint + grade, live sun-on-horizon scene, link to sd-sunset
 - **Stargazing tonight:** top dark-sky site, score %, clear-dark hours, cloud %, moon phase + illumination, live moon SVG, link to stargaze
 - **Farmers markets today:** markets open today with weather at their mid-hour
