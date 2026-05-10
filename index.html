@@ -633,6 +633,14 @@
                 </div>
                 <p class="text-xs text-slate-500 mt-2">Recycling cycles biweekly; enter any past or upcoming pickup date and the dashboard will compute the next one.</p>
             </fieldset>`;
+        const showsGroup = `
+            <fieldset class="rounded-lg border border-slate-700 p-4">
+                <legend class="px-2 text-xs uppercase tracking-wide text-slate-400">Favorite TV shows (optional)</legend>
+                <input name="shows" type="text" value="${(ex.shows || []).map(s => s.name).join(', ').replace(/"/g, '&quot;')}"
+                    class="w-full px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400"
+                    placeholder="Survivor, The Traitors">
+                <p class="text-xs text-slate-500 mt-2">Comma-separated. Looked up via TVMaze. Broadcast shows surface only on air night; streaming shows surface in a 7-day window before each new episode.</p>
+            </fieldset>`;
         content.innerHTML = `
             <section class="card rounded-xl p-5">
                 <h2 class="text-xl font-semibold mb-1">${existing ? 'Edit your' : 'Set up your'} locations</h2>
@@ -642,6 +650,7 @@
                     ${fieldGroup('home', 'Home')}
                     ${fieldGroup('work', 'Work')}
                     ${scheduleGroup}
+                    ${showsGroup}
                     <button type="submit" class="w-full py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium">Save</button>
                 </form>
             </section>`;
@@ -662,6 +671,13 @@
                 ]);
                 const trashDay = f.trash_day.value;
                 const recyclingNext = f.recycling_next.value;
+                const showsRaw = (f.shows ? f.shows.value.trim() : '');
+                const showNames = showsRaw ? showsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+                const shows = [];
+                for (const name of showNames) {
+                    try { shows.push(await tvmazeSearch(name)); }
+                    catch (e) { /* skip not-found shows silently */ }
+                }
                 saveLocations({
                     home: { ...home, ...homeParts, label: 'Home' },
                     work: { ...work, ...workParts, label: 'Work' },
@@ -669,6 +685,7 @@
                         trashDay: trashDay === '' ? null : Number(trashDay),
                         recyclingNext: recyclingNext || null,
                     },
+                    shows,
                 });
                 LOCATIONS = loadLocations();
                 run();
@@ -709,6 +726,9 @@
 
         // ── SD Wave game today ────────────────────────────────────────
         sections.push(await renderWave(now));
+
+        // ── TV (favorite shows) ──────────────────────────────────────
+        sections.push(await renderTV(now));
 
         // ── Sunrise + Sunset ──────────────────────────────────────────
         sections.push(await renderSunrise(now));
@@ -928,6 +948,78 @@
         } catch (e) {
             return '';
         }
+    }
+
+    // ── TV (TVMaze) ───────────────────────────────────────────────────
+    async function tvmazeSearch(name) {
+        const r = await fetch(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(name)}`);
+        if (!r.ok) throw new Error(`Show not found: ${name}`);
+        const data = await r.json();
+        const type = data.network ? 'broadcast' : (data.webChannel ? 'streaming' : 'broadcast');
+        return { id: data.id, name: data.name, type };
+    }
+    async function tvmazeEpisodes(showId) {
+        const r = await fetch(`https://api.tvmaze.com/shows/${showId}/episodes`);
+        return r.ok ? await r.json() : [];
+    }
+    async function tvmazeSeasons(showId) {
+        const r = await fetch(`https://api.tvmaze.com/shows/${showId}/seasons`);
+        return r.ok ? await r.json() : [];
+    }
+    function fmt12FromHHMM(timeStr) {
+        if (!timeStr) return '';
+        const [h, m] = timeStr.split(':').map(Number);
+        const hour12 = ((h + 11) % 12) + 1;
+        const ampm = h < 12 ? 'AM' : 'PM';
+        return m === 0 ? `${hour12} ${ampm}` : `${hour12}:${String(m).padStart(2, '0')} ${ampm}`;
+    }
+
+    async function renderTV(now) {
+        const shows = LOCATIONS.shows || [];
+        if (!shows.length) return '';
+        const todayStr = pacificISODate(now);
+        const horizonStr = pacificISODate(new Date(now.getTime() + 7 * 86400000));
+
+        const lines = [];
+        await Promise.all(shows.map(async show => {
+            try {
+                const [episodes, seasons] = await Promise.all([
+                    tvmazeEpisodes(show.id),
+                    tvmazeSeasons(show.id),
+                ]);
+                const seasonOrder = {};
+                for (const s of seasons) seasonOrder[s.number] = s.episodeOrder;
+
+                for (const ep of episodes) {
+                    if (!ep.airdate) continue;
+                    const isPremiere = ep.number === 1;
+                    const isFinale = seasonOrder[ep.season] && ep.number === seasonOrder[ep.season];
+                    const tag = isPremiere ? ' (premiere)' : isFinale ? ' (finale)' : '';
+
+                    if (show.type === 'broadcast') {
+                        if (ep.airdate !== todayStr) continue;
+                        const time = ep.airtime ? fmt12FromHHMM(ep.airtime) : '';
+                        lines.push({ when: 0, html: `<li><span class="font-semibold">${show.name}</span>${time ? ` <span class="text-slate-400">— ${time}</span>` : ''}${tag ? `<span class="text-amber-300">${tag}</span>` : ''}</li>` });
+                    } else {
+                        if (ep.airdate < todayStr || ep.airdate > horizonStr) continue;
+                        const days = Math.round((new Date(ep.airdate + 'T12:00:00').getTime() - new Date(todayStr + 'T12:00:00').getTime()) / 86400000);
+                        const dayLabel = days === 0
+                            ? 'today'
+                            : new Date(ep.airdate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+                        lines.push({ when: days, html: `<li><span class="font-semibold">${show.name}</span> <span class="text-slate-400">S${ep.season}E${ep.number}</span> <span class="text-slate-400">— ${dayLabel}</span>${tag ? `<span class="text-amber-300">${tag}</span>` : ''}</li>` });
+                    }
+                }
+            } catch (e) { /* skip show on error */ }
+        }));
+
+        if (!lines.length) return '';
+        lines.sort((a, b) => a.when - b.when);
+        return `<section class="card rounded-xl p-3">
+            <div class="flex items-baseline justify-between mb-1">
+                <h2 class="text-lg font-semibold">TV</h2>
+            </div>
+            <ul class="space-y-1 text-sm text-slate-200">${lines.map(l => l.html).join('')}</ul>
+        </section>`;
     }
 
     async function renderWave(now) {
