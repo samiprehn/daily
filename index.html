@@ -856,19 +856,26 @@
     function whenLabel(days) {
         if (days === 0) return 'today';
         if (days === 1) return 'tomorrow';
-        return `in ${days} days`;
+        if (days <= 7) return 'this week';
+        if (days <= 14) return 'next week';
+        return null;
     }
 
     async function renderTrash() {
         const sched = LOCATIONS.schedule || {};
         const tDays = sched.trashDay != null ? daysUntilDayOfWeek(sched.trashDay) : null;
         const rDays = sched.recyclingNext ? daysUntilRecycling(sched.recyclingNext) : null;
-        const showTrash = tDays != null && tDays <= 1;
-        const showRecycling = rDays != null && rDays <= 1;
-        if (!showTrash && !showRecycling) return '';
+        // Show the card only when at least one of them is today or tomorrow.
+        // When the card shows, include the other one with broader wording
+        // (this week / next week) if applicable.
+        const eitherClose = (tDays != null && tDays <= 1) || (rDays != null && rDays <= 1);
+        if (!eitherClose) return '';
+        const tLabel = tDays != null ? whenLabel(tDays) : null;
+        const rLabel = rDays != null ? whenLabel(rDays) : null;
         const parts = [];
-        if (showTrash) parts.push(`<div><span class="text-lg mr-1">🗑️</span><span class="font-semibold">Trash</span> <span class="text-slate-300">${whenLabel(tDays)}</span></div>`);
-        if (showRecycling) parts.push(`<div><span class="text-lg mr-1">♻️</span><span class="font-semibold">Recycling</span> <span class="text-slate-300">${whenLabel(rDays)}</span></div>`);
+        if (tLabel) parts.push(`<div><span class="text-lg mr-1">🗑️</span><span class="font-semibold">Trash</span> <span class="text-slate-300">${tLabel}</span></div>`);
+        if (rLabel) parts.push(`<div><span class="text-lg mr-1">♻️</span><span class="font-semibold">Recycling</span> <span class="text-slate-300">${rLabel}</span></div>`);
+        if (!parts.length) return '';
         return `<section class="card rounded-xl p-3">
             <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">${parts.join('')}</div>
         </section>`;
