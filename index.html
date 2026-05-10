@@ -863,10 +863,12 @@
         const sched = LOCATIONS.schedule || {};
         const tDays = sched.trashDay != null ? daysUntilDayOfWeek(sched.trashDay) : null;
         const rDays = sched.recyclingNext ? daysUntilRecycling(sched.recyclingNext) : null;
-        if (tDays == null && rDays == null) return '';
+        const showTrash = tDays != null && tDays <= 1;
+        const showRecycling = rDays != null && rDays <= 1;
+        if (!showTrash && !showRecycling) return '';
         const parts = [];
-        if (tDays != null) parts.push(`<div><span class="text-lg mr-1">🗑️</span><span class="font-semibold">Trash</span> <span class="text-slate-300">${whenLabel(tDays)}</span></div>`);
-        if (rDays != null) parts.push(`<div><span class="text-lg mr-1">♻️</span><span class="font-semibold">Recycling</span> <span class="text-slate-300">${whenLabel(rDays)}</span></div>`);
+        if (showTrash) parts.push(`<div><span class="text-lg mr-1">🗑️</span><span class="font-semibold">Trash</span> <span class="text-slate-300">${whenLabel(tDays)}</span></div>`);
+        if (showRecycling) parts.push(`<div><span class="text-lg mr-1">♻️</span><span class="font-semibold">Recycling</span> <span class="text-slate-300">${whenLabel(rDays)}</span></div>`);
         return `<section class="card rounded-xl p-3">
             <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">${parts.join('')}</div>
         </section>`;
