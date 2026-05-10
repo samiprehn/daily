@@ -27,6 +27,8 @@
 <body>
     <div class="container mx-auto px-4 py-6 max-w-3xl">
         <header class="mb-5 flex items-baseline gap-2 flex-wrap">
+            <span class="text-xl font-semibold text-slate-100">Dashboard</span>
+            <span class="text-slate-500">·</span>
             <span id="dateLine" class="text-xl font-semibold"></span>
             <span class="text-slate-500">·</span>
             <span id="timeLine" class="text-xl font-semibold tracking-tight text-slate-300"></span>
@@ -663,8 +665,10 @@
         // ── Stargazing tonight ────────────────────────────────────────
         sections.push(await renderStargaze(now));
 
-        // ── Farmers markets today ─────────────────────────────────────
-        sections.push(await renderFarmers(now));
+        // ── Farmers markets today (skip on weekends — handled by weekend prep) ─
+        if (!isWeekend) {
+            sections.push(await renderFarmers(now));
+        }
 
         // ── Weekend prep (if not Sunday) ──────────────────────────────
         if (showWeekendPrep) {
