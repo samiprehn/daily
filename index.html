@@ -50,16 +50,56 @@
         <div id="content" class="space-y-4">
             <div class="card rounded-xl p-4 text-slate-400">Loading…</div>
         </div>
+        <div class="text-center mt-6 mb-2">
+            <button id="editLocationsBtn" class="text-xs text-slate-500 hover:text-slate-300 underline-offset-2 hover:underline">edit locations</button>
+        </div>
     </div>
 
     <script>
     // ── Config ────────────────────────────────────────────────────────
-    const ZIPS = {
-        '92117': { lat: 32.8161, lon: -117.1830, name: 'Clairemont' },
-        '92121': { lat: 32.8949, lon: -117.2089, name: 'Sorrento Valley' },
-    };
+    // TomTom API key, restricted in the TomTom dashboard to samiprehn.github.io/*
+    // (so it's safe to commit — works only when called from this site).
+    const TOMTOM_KEY = 'W9unqXbqU9iwlQdLd47fsz2s3TdBQjhX';
+
+    const LOCATIONS_KEY = 'daily_locations';
+    function loadLocations() {
+        try {
+            const raw = localStorage.getItem(LOCATIONS_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.home && parsed.work
+                && typeof parsed.home.lat === 'number' && typeof parsed.work.lat === 'number') {
+                return parsed;
+            }
+        } catch (e) {}
+        return null;
+    }
+    function saveLocations(locs) {
+        localStorage.setItem(LOCATIONS_KEY, JSON.stringify(locs));
+    }
+    function clearLocations() {
+        localStorage.removeItem(LOCATIONS_KEY);
+    }
+    async function geocodeAddress(address) {
+        const url = `https://api.tomtom.com/search/2/geocode/${encodeURIComponent(address)}.json`
+            + `?key=${TOMTOM_KEY}&countrySet=US&limit=1`;
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`TomTom geocode ${r.status}`);
+        const data = await r.json();
+        const hit = data.results && data.results[0];
+        if (!hit) throw new Error('Address not found');
+        return {
+            lat: hit.position.lat,
+            lon: hit.position.lon,
+            address: hit.address?.freeformAddress || address,
+        };
+    }
+
     const TAF_WORKER = 'https://sd-sunset-taf.sami-prehn.workers.dev';
     const SD_LAT = 32.72, SD_LON = -117.22;
+
+    // Locations come from localStorage; populated by the setup flow on first load.
+    let LOCATIONS = loadLocations();
     const PI = Math.PI, RAD = PI / 180, OBLIQUITY = RAD * 23.4397;
 
     // ── Spots: sunset (mirrors sd_sunset) ─────────────────────────────
@@ -515,8 +555,82 @@
         svg.setAttribute('title', `${phase} · ${Math.round(illum * 100)}%`);
     }
 
+    // ── Setup view ────────────────────────────────────────────────────
+    function renderSetup(error = '') {
+        const content = document.getElementById('content');
+        const fieldGroup = (kind, displayName) => `
+            <fieldset class="rounded-lg border border-slate-700 p-4">
+                <legend class="px-2 text-xs uppercase tracking-wide text-slate-400">${displayName}</legend>
+                <div class="space-y-3">
+                    <label class="block">
+                        <span class="text-xs text-slate-400">Street</span>
+                        <input name="${kind}_street" type="text" required
+                            autocomplete="section-${kind} address-line1"
+                            class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400"
+                            placeholder="123 Main St">
+                    </label>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <label class="block">
+                            <span class="text-xs text-slate-400">City</span>
+                            <input name="${kind}_city" type="text" required
+                                autocomplete="section-${kind} address-level2"
+                                class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-400">State</span>
+                            <input name="${kind}_state" type="text" required maxlength="2"
+                                autocomplete="section-${kind} address-level1"
+                                class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400 uppercase"
+                                placeholder="CA">
+                        </label>
+                        <label class="block">
+                            <span class="text-xs text-slate-400">ZIP</span>
+                            <input name="${kind}_zip" type="text" required inputmode="numeric"
+                                autocomplete="section-${kind} postal-code"
+                                class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
+                        </label>
+                    </div>
+                </div>
+            </fieldset>`;
+        content.innerHTML = `
+            <section class="card rounded-xl p-5">
+                <h2 class="text-xl font-semibold mb-1">Set up your locations</h2>
+                <p class="text-sm text-slate-400 mb-4">Stored on this device only — never uploaded. You can edit later.</p>
+                ${error ? `<p class="text-sm text-red-400 mb-3">${error}</p>` : ''}
+                <form id="locForm" class="space-y-4">
+                    ${fieldGroup('home', 'Home')}
+                    ${fieldGroup('work', 'Work')}
+                    <button type="submit" class="w-full py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium">Save</button>
+                </form>
+            </section>`;
+        document.getElementById('locForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const submitBtn = e.target.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Locating…';
+            const f = e.target.elements;
+            const homeAddr = `${f.home_street.value.trim()}, ${f.home_city.value.trim()}, ${f.home_state.value.trim().toUpperCase()} ${f.home_zip.value.trim()}`;
+            const workAddr = `${f.work_street.value.trim()}, ${f.work_city.value.trim()}, ${f.work_state.value.trim().toUpperCase()} ${f.work_zip.value.trim()}`;
+            try {
+                const [home, work] = await Promise.all([
+                    geocodeAddress(homeAddr),
+                    geocodeAddress(workAddr),
+                ]);
+                saveLocations({
+                    home: { ...home, label: 'Home' },
+                    work: { ...work, label: 'Work' },
+                });
+                LOCATIONS = loadLocations();
+                run();
+            } catch (err) {
+                renderSetup(`Couldn't find one of those addresses: ${err.message}`);
+            }
+        });
+    }
+
     // ── Main ──────────────────────────────────────────────────────────
     async function run() {
+        if (!LOCATIONS) { renderSetup(); return; }
         const now = new Date();
         const dow = now.getDay();
         const isWeekend = dow === 0 || dow === 6;
@@ -531,6 +645,11 @@
 
         // ── Weather slots ─────────────────────────────────────────────
         sections.push(await renderWeather(now, isWeekend));
+
+        // ── Commute (weekdays only) ──────────────────────────────────
+        if (!isWeekend) {
+            sections.push(await renderCommute(now));
+        }
 
         // ── Sunset ────────────────────────────────────────────────────
         sections.push(await renderSunset(now));
@@ -553,29 +672,31 @@
     }
 
     async function renderWeather(now, isWeekend) {
+        const HOME = LOCATIONS.home, WORK = LOCATIONS.work;
         const slots = isWeekend
             ? [
-                { hour: 8,  zip: '92117', label: '8am' },
-                { hour: 12, zip: '92117', label: 'Noon', uv: true },
-                { hour: 17, zip: '92117', label: '5pm' },
+                { hour: 8,  loc: HOME, label: '8am' },
+                { hour: 12, loc: HOME, label: 'Noon', uv: true },
+                { hour: 17, loc: HOME, label: '5pm' },
               ]
             : [
-                { hour: 8,  zip: '92117', label: '8am' },
-                { hour: 12, zip: '92121', label: 'Noon', uv: true },
-                { hour: 17, zip: '92117', label: '5pm' },
+                { hour: 8,  loc: HOME, label: '8am' },
+                { hour: 12, loc: WORK, label: 'Noon', uv: true },
+                { hour: 17, loc: HOME, label: '5pm' },
               ];
 
         try {
-            // Fetch all unique zips in parallel
-            const uniqZips = [...new Set(slots.map(s => s.zip).concat(['92117']))];
-            await Promise.all(uniqZips.map(z => fetchMeteo(ZIPS[z].lat, ZIPS[z].lon)));
+            // Fetch all unique coords in parallel
+            const uniqLocs = [...new Map(slots.map(s => [`${s.loc.lat},${s.loc.lon}`, s.loc])).values()];
+            if (!uniqLocs.find(l => l.lat === HOME.lat && l.lon === HOME.lon)) uniqLocs.push(HOME);
+            await Promise.all(uniqLocs.map(l => fetchMeteo(l.lat, l.lon)));
 
             const cards = slots.map(s => {
-                const meteo = meteoCache[`${ZIPS[s.zip].lat},${ZIPS[s.zip].lon}`];
+                const meteo = meteoCache[`${s.loc.lat},${s.loc.lon}`];
                 const idx = indexAt(meteo.hourly, now, s.hour);
                 if (idx === -1) {
                     return `<div class="rounded-xl p-3 bg-slate-700/40">
-                        <div class="label">${s.label} · ${ZIPS[s.zip].name}</div>
+                        <div class="label">${s.label} · ${s.loc.label}</div>
                         <div class="text-slate-400 text-sm mt-1">No data</div>
                     </div>`;
                 }
@@ -590,7 +711,7 @@
                 const uvL = s.uv ? uvLabel(uv) : null;
                 return `<div class="rounded-xl p-3 bg-slate-700/40">
                     <div class="flex items-baseline justify-between">
-                        <div class="label">${s.label} · ${ZIPS[s.zip].name}</div>
+                        <div class="label">${s.label} · ${s.loc.label}</div>
                         <div class="text-2xl">${weatherEmoji(code)}</div>
                     </div>
                     <div class="flex items-baseline justify-between flex-wrap gap-x-3 gap-y-1 mt-0.5">
@@ -603,10 +724,10 @@
                 </div>`;
             }).join('');
 
-            // Tonight's low @ 92117
-            const meteo117 = meteoCache[`${ZIPS['92117'].lat},${ZIPS['92117'].lon}`];
-            const todayIdx = dailyIndex(meteo117.daily, now);
-            const lowTonight = todayIdx >= 0 ? Math.round(meteo117.daily.temperature_2m_min[todayIdx + 1] ?? meteo117.daily.temperature_2m_min[todayIdx]) : null;
+            // Tonight's low @ home
+            const meteoHome = meteoCache[`${HOME.lat},${HOME.lon}`];
+            const todayIdx = dailyIndex(meteoHome.daily, now);
+            const lowTonight = todayIdx >= 0 ? Math.round(meteoHome.daily.temperature_2m_min[todayIdx + 1] ?? meteoHome.daily.temperature_2m_min[todayIdx]) : null;
 
             return `<section class="card rounded-xl p-4">
                 <div class="flex items-baseline justify-between mb-3">
@@ -642,6 +763,43 @@
         }).filter(Boolean);
         evaluated.sort((a, b) => (GRADE_RANK[a.grade] - GRADE_RANK[b.grade]) || (a.score - b.score));
         return { sunset, top: evaluated[0] };
+    }
+
+    async function renderCommute(now) {
+        const HOME = LOCATIONS.home, WORK = LOCATIONS.work;
+        const beforeNoon = now.getHours() < 12;
+        const origin = beforeNoon ? HOME : WORK;
+        const dest   = beforeNoon ? WORK : HOME;
+        const directionLabel = beforeNoon ? 'To work' : 'To home';
+        try {
+            const url = `https://api.tomtom.com/routing/1/calculateRoute/`
+                + `${origin.lat},${origin.lon}:${dest.lat},${dest.lon}/json`
+                + `?key=${TOMTOM_KEY}&traffic=true&travelMode=car&computeTravelTimeFor=all`;
+            const r = await fetch(url);
+            if (!r.ok) throw new Error(`TomTom ${r.status}`);
+            const data = await r.json();
+            const route = data.routes && data.routes[0];
+            if (!route || !route.summary) throw new Error('No route');
+            const s = route.summary;
+            const minutes = Math.round(s.travelTimeInSeconds / 60);
+            const trafficMinutes = s.trafficDelayInSeconds ? Math.round(s.trafficDelayInSeconds / 60) : 0;
+            const trafficNote = trafficMinutes >= 2
+                ? `<span class="text-xs text-orange-300 ml-2">+${trafficMinutes} min traffic</span>`
+                : '';
+            return `<section class="card rounded-xl p-4">
+                <div class="flex items-baseline justify-between gap-2 flex-wrap">
+                    <h2 class="text-lg font-semibold">🚗 ${directionLabel}${trafficNote}</h2>
+                    <div class="text-2xl font-bold">${minutes} <span class="text-sm font-normal text-slate-400">min</span></div>
+                </div>
+            </section>`;
+        } catch (e) {
+            return `<section class="card rounded-xl p-4">
+                <div class="flex items-baseline justify-between">
+                    <h2 class="text-lg font-semibold">🚗 ${directionLabel}</h2>
+                    <span class="text-sm text-slate-400">${e.message}</span>
+                </div>
+            </section>`;
+        }
     }
 
     async function renderSunset(now) {
@@ -925,6 +1083,12 @@
             ${starBlock}
         </section>`;
     }
+
+    document.getElementById('editLocationsBtn').addEventListener('click', () => {
+        clearLocations();
+        LOCATIONS = null;
+        run();
+    });
 
     run().catch(err => {
         document.getElementById('content').innerHTML = `<div class="card rounded-xl p-4"><p class="text-red-400">Couldn't load dashboard: ${err.message}</p></div>`;
