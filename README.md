@@ -15,8 +15,7 @@ Personal daily-summary dashboard. **Not** linked from samiprehn.github.io.
 - **Commute** (weekdays only): driving time with current traffic
   - Before noon: Home → Work
   - After noon: Work → Home
-- **Padres game today** (if there is one): vs/@ opponent, start time, or live score / final score. Pulled from ESPN's free MLB scoreboard.
-- **SD Wave game today** (if there is one): same shape as the Padres card, pulled from ESPN's NWSL scoreboard.
+- **Sports** (configurable): list of favorite teams in setup. Today's games for each are pulled from ESPN's free scoreboard endpoints across MLB, NFL, NBA, NHL, WNBA, NWSL, and MLS.
 - **TV** (if any favorite shows are scheduled): broadcast shows surface only on air night with the air time; streaming shows surface in a 7-day window before each new episode. Premieres and finales are highlighted. Pulled from TVMaze (free, no key).
 - **Sunset:** time, top viewpoint + grade, live sun-on-horizon scene, link to sd-sunset
 - **Stargazing tonight:** top dark-sky site, score %, clear-dark hours, cloud %, moon phase + illumination, live moon SVG, link to stargaze

@@ -641,6 +641,14 @@
                     placeholder="Survivor, The Traitors">
                 <p class="text-xs text-slate-500 mt-2">Comma-separated. Looked up via TVMaze. Broadcast shows surface only on air night; streaming shows surface in a 7-day window before each new episode.</p>
             </fieldset>`;
+        const teamsGroup = `
+            <fieldset class="rounded-lg border border-slate-700 p-4">
+                <legend class="px-2 text-xs uppercase tracking-wide text-slate-400">Favorite sports teams (optional)</legend>
+                <input name="teams" type="text" value="${(ex.teams || []).map(t => t.shortName || t.name).join(', ').replace(/"/g, '&quot;')}"
+                    class="w-full px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400"
+                    placeholder="Padres, Wave FC, Lakers">
+                <p class="text-xs text-slate-500 mt-2">Comma-separated. Looks across MLB, NFL, NBA, NHL, WNBA, NWSL, MLS via ESPN.</p>
+            </fieldset>`;
         content.innerHTML = `
             <section class="card rounded-xl p-5">
                 <h2 class="text-xl font-semibold mb-1">${existing ? 'Edit your' : 'Set up your'} locations</h2>
@@ -651,6 +659,7 @@
                     ${fieldGroup('work', 'Work')}
                     ${scheduleGroup}
                     ${showsGroup}
+                    ${teamsGroup}
                     <button type="submit" class="w-full py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium">Save</button>
                 </form>
             </section>`;
@@ -678,6 +687,13 @@
                     try { shows.push(await tvmazeSearch(name)); }
                     catch (e) { /* skip not-found shows silently */ }
                 }
+                const teamsRaw = (f.teams ? f.teams.value.trim() : '');
+                const teamNames = teamsRaw ? teamsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+                const teams = [];
+                for (const name of teamNames) {
+                    try { teams.push(await searchSportsTeam(name)); }
+                    catch (e) { /* skip not-found teams silently */ }
+                }
                 saveLocations({
                     home: { ...home, ...homeParts, label: 'Home' },
                     work: { ...work, ...workParts, label: 'Work' },
@@ -686,6 +702,7 @@
                         recyclingNext: recyclingNext || null,
                     },
                     shows,
+                    teams,
                 });
                 LOCATIONS = loadLocations();
                 run();
@@ -721,11 +738,8 @@
             sections.push(await renderCommute(now));
         }
 
-        // ── Padres game today ─────────────────────────────────────────
-        sections.push(await renderPadres(now));
-
-        // ── SD Wave game today ────────────────────────────────────────
-        sections.push(await renderWave(now));
+        // ── Sports (configured teams) ────────────────────────────────
+        sections.push(await renderSports(now));
 
         // ── TV (favorite shows) ──────────────────────────────────────
         sections.push(await renderTV(now));
@@ -907,47 +921,104 @@
         </section>`;
     }
 
-    async function renderPadres(now) {
+    // ── Sports (ESPN) ────────────────────────────────────────────────
+    const ESPN_LEAGUES = [
+        { sport: 'baseball',   league: 'mlb' },
+        { sport: 'football',   league: 'nfl' },
+        { sport: 'basketball', league: 'nba' },
+        { sport: 'hockey',     league: 'nhl' },
+        { sport: 'basketball', league: 'wnba' },
+        { sport: 'soccer',     league: 'usa.nwsl' },
+        { sport: 'soccer',     league: 'usa.1' }, // MLS
+    ];
+    const _teamsCache = {};
+    async function fetchLeagueTeams(sport, league) {
+        const key = `${sport}/${league}`;
+        if (_teamsCache[key]) return _teamsCache[key];
         try {
-            const dateStr = pacificISODate(now).replace(/-/g, '');
-            const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${dateStr}`);
-            if (!r.ok) return '';
+            const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${sport}/${league}/teams`);
+            if (!r.ok) return [];
             const data = await r.json();
-            const events = data.events || [];
-            for (const ev of events) {
-                const comp = ev.competitions && ev.competitions[0];
-                if (!comp) continue;
-                const competitors = comp.competitors || [];
-                const sd = competitors.find(c => c.team && c.team.abbreviation === 'SD');
-                if (!sd) continue;
-                const opp = competitors.find(c => c.team && c.team.abbreviation !== 'SD');
-                const isHome = sd.homeAway === 'home';
-                const start = new Date(ev.date);
-                const stateName = (comp.status && comp.status.type && comp.status.type.state) || 'pre';
-                const sdScore = parseInt(sd.score) || 0;
-                const oppScore = parseInt(opp.score) || 0;
-                const oppAbbr = opp.team.abbreviation;
-                let summary;
-                if (stateName === 'pre') {
-                    summary = `${isHome ? 'vs' : '@'} ${oppAbbr} · <span class="font-semibold">${fmtTime(start)}</span>`;
-                } else if (stateName === 'in') {
-                    const detail = (comp.status.type.shortDetail || 'live');
-                    summary = `${isHome ? 'vs' : '@'} ${oppAbbr} · <span class="text-amber-300">${detail}</span> · <span class="font-semibold">${sdScore}–${oppScore}</span>`;
-                } else {
-                    const won = sdScore > oppScore;
-                    summary = `${won ? 'beat' : 'lost to'} ${oppAbbr} <span class="font-semibold">${sdScore}–${oppScore}</span>`;
+            _teamsCache[key] = (data?.sports?.[0]?.leagues?.[0]?.teams || []).map(t => t.team);
+            return _teamsCache[key];
+        } catch (e) { return []; }
+    }
+    async function searchSportsTeam(name) {
+        const lower = name.toLowerCase();
+        for (const lg of ESPN_LEAGUES) {
+            const teams = await fetchLeagueTeams(lg.sport, lg.league);
+            for (const t of teams) {
+                const candidates = [t.displayName, t.name, t.shortDisplayName, t.location, t.abbreviation]
+                    .filter(Boolean).map(s => s.toLowerCase());
+                if (candidates.some(c => c === lower || c.includes(lower) || lower.includes(c))) {
+                    return {
+                        name: t.displayName,
+                        shortName: t.shortDisplayName || t.name || t.displayName,
+                        sport: lg.sport,
+                        league: lg.league,
+                        id: String(t.id),
+                    };
                 }
-                return `<section class="card rounded-xl p-3">
-                    <div class="flex items-baseline justify-between gap-2 flex-wrap">
-                        <h2 class="text-lg font-semibold">Padres</h2>
-                        <span class="text-sm">${summary}</span>
-                    </div>
-                </section>`;
             }
-            return '';
-        } catch (e) {
-            return '';
         }
+        throw new Error(`Team not found: ${name}`);
+    }
+
+    async function renderSports(now) {
+        const teams = LOCATIONS.teams || [];
+        if (!teams.length) return '';
+        const dateStr = pacificISODate(now).replace(/-/g, '');
+        // Group by league to share scoreboard fetches
+        const byLeague = {};
+        for (const team of teams) {
+            const key = `${team.sport}/${team.league}`;
+            if (!byLeague[key]) byLeague[key] = { sport: team.sport, league: team.league, teams: [] };
+            byLeague[key].teams.push(team);
+        }
+        const lines = [];
+        await Promise.all(Object.values(byLeague).map(async grp => {
+            try {
+                const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${grp.sport}/${grp.league}/scoreboard?dates=${dateStr}`);
+                if (!r.ok) return;
+                const data = await r.json();
+                const events = data.events || [];
+                for (const team of grp.teams) {
+                    for (const ev of events) {
+                        const comp = ev.competitions?.[0];
+                        if (!comp) continue;
+                        const competitors = comp.competitors || [];
+                        const me = competitors.find(c => String(c.team?.id) === team.id);
+                        if (!me) continue;
+                        const opp = competitors.find(c => c !== me);
+                        if (!opp) continue;
+                        const isHome = me.homeAway === 'home';
+                        const start = new Date(ev.date);
+                        const stateName = comp.status?.type?.state || 'pre';
+                        const myScore = parseInt(me.score) || 0;
+                        const oppScore = parseInt(opp.score) || 0;
+                        const oppLabel = opp.team.shortDisplayName || opp.team.abbreviation || 'Opp';
+                        let summary;
+                        if (stateName === 'pre') {
+                            summary = `${isHome ? 'vs' : '@'} ${oppLabel} · <span class="font-semibold">${fmtTime(start)}</span>`;
+                        } else if (stateName === 'in') {
+                            const detail = comp.status?.type?.shortDetail || 'live';
+                            summary = `${isHome ? 'vs' : '@'} ${oppLabel} · <span class="text-amber-300">${detail}</span> · <span class="font-semibold">${myScore}–${oppScore}</span>`;
+                        } else {
+                            const result = myScore > oppScore ? 'beat' : myScore < oppScore ? 'lost to' : 'tied';
+                            summary = `${result} ${oppLabel} <span class="font-semibold">${myScore}–${oppScore}</span>`;
+                        }
+                        lines.push(`<li><span class="font-semibold">${team.shortName}</span> <span class="text-slate-300">${summary}</span></li>`);
+                    }
+                }
+            } catch (e) { /* skip league on error */ }
+        }));
+        if (!lines.length) return '';
+        return `<section class="card rounded-xl p-3">
+            <div class="flex items-baseline justify-between mb-1">
+                <h2 class="text-lg font-semibold">Sports</h2>
+            </div>
+            <ul class="space-y-1 text-sm text-slate-200">${lines.join('')}</ul>
+        </section>`;
     }
 
     // ── TV (TVMaze) ───────────────────────────────────────────────────
@@ -1020,55 +1091,6 @@
             </div>
             <ul class="space-y-1 text-sm text-slate-200">${lines.map(l => l.html).join('')}</ul>
         </section>`;
-    }
-
-    async function renderWave(now) {
-        try {
-            const dateStr = pacificISODate(now).replace(/-/g, '');
-            const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/usa.nwsl/scoreboard?dates=${dateStr}`);
-            if (!r.ok) return '';
-            const data = await r.json();
-            const events = data.events || [];
-            for (const ev of events) {
-                const comp = ev.competitions && ev.competitions[0];
-                if (!comp) continue;
-                const competitors = comp.competitors || [];
-                // Match the SD Wave by checking for "San Diego" in displayName/location
-                // (the only NWSL team based in SD).
-                const wave = competitors.find(c => c.team && (
-                    (c.team.location || '').toLowerCase().includes('san diego')
-                    || (c.team.displayName || '').toLowerCase().includes('san diego')
-                ));
-                if (!wave) continue;
-                const opp = competitors.find(c => c !== wave);
-                if (!opp) continue;
-                const isHome = wave.homeAway === 'home';
-                const start = new Date(ev.date);
-                const stateName = (comp.status && comp.status.type && comp.status.type.state) || 'pre';
-                const waveScore = parseInt(wave.score) || 0;
-                const oppScore = parseInt(opp.score) || 0;
-                const oppLabel = opp.team.shortDisplayName || opp.team.abbreviation || 'Opponent';
-                let summary;
-                if (stateName === 'pre') {
-                    summary = `${isHome ? 'vs' : '@'} ${oppLabel} · <span class="font-semibold">${fmtTime(start)}</span>`;
-                } else if (stateName === 'in') {
-                    const detail = (comp.status.type.shortDetail || 'live');
-                    summary = `${isHome ? 'vs' : '@'} ${oppLabel} · <span class="text-amber-300">${detail}</span> · <span class="font-semibold">${waveScore}–${oppScore}</span>`;
-                } else {
-                    const result = waveScore > oppScore ? 'beat' : waveScore < oppScore ? 'lost to' : 'tied';
-                    summary = `${result} ${oppLabel} <span class="font-semibold">${waveScore}–${oppScore}</span>`;
-                }
-                return `<section class="card rounded-xl p-3">
-                    <div class="flex items-baseline justify-between gap-2 flex-wrap">
-                        <h2 class="text-lg font-semibold">Wave FC</h2>
-                        <span class="text-sm">${summary}</span>
-                    </div>
-                </section>`;
-            }
-            return '';
-        } catch (e) {
-            return '';
-        }
     }
 
     async function renderCommute(now) {
