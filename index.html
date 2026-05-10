@@ -707,6 +707,9 @@
         // ── Padres game today ─────────────────────────────────────────
         sections.push(await renderPadres(now));
 
+        // ── SD Wave game today ────────────────────────────────────────
+        sections.push(await renderWave(now));
+
         // ── Sunrise + Sunset ──────────────────────────────────────────
         sections.push(await renderSunrise(now));
         sections.push(await renderSunset(now));
@@ -917,6 +920,54 @@
                 return `<section class="card rounded-xl p-3">
                     <div class="flex items-baseline justify-between gap-2 flex-wrap">
                         <h2 class="text-lg font-semibold">Padres</h2>
+                        <span class="text-sm">${summary}</span>
+                    </div>
+                </section>`;
+            }
+            return '';
+        } catch (e) {
+            return '';
+        }
+    }
+
+    async function renderWave(now) {
+        try {
+            const dateStr = pacificISODate(now).replace(/-/g, '');
+            const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/usa.nwsl/scoreboard?dates=${dateStr}`);
+            if (!r.ok) return '';
+            const data = await r.json();
+            const events = data.events || [];
+            for (const ev of events) {
+                const comp = ev.competitions && ev.competitions[0];
+                if (!comp) continue;
+                const competitors = comp.competitors || [];
+                // SD Wave's ESPN team id is 21422 (also matches "Wave" in shortDisplayName)
+                const wave = competitors.find(c => c.team && (
+                    String(c.team.id) === '21422'
+                    || (c.team.shortDisplayName || '').toLowerCase().includes('wave')
+                ));
+                if (!wave) continue;
+                const opp = competitors.find(c => c !== wave);
+                if (!opp) continue;
+                const isHome = wave.homeAway === 'home';
+                const start = new Date(ev.date);
+                const stateName = (comp.status && comp.status.type && comp.status.type.state) || 'pre';
+                const waveScore = parseInt(wave.score) || 0;
+                const oppScore = parseInt(opp.score) || 0;
+                const oppLabel = opp.team.shortDisplayName || opp.team.abbreviation || 'Opponent';
+                let summary;
+                if (stateName === 'pre') {
+                    summary = `${isHome ? 'vs' : '@'} ${oppLabel} · <span class="font-semibold">${fmtTime(start)}</span>`;
+                } else if (stateName === 'in') {
+                    const detail = (comp.status.type.shortDetail || 'live');
+                    summary = `${isHome ? 'vs' : '@'} ${oppLabel} · <span class="text-amber-300">${detail}</span> · <span class="font-semibold">${waveScore}–${oppScore}</span>`;
+                } else {
+                    const result = waveScore > oppScore ? 'beat' : waveScore < oppScore ? 'lost to' : 'tied';
+                    summary = `${result} ${oppLabel} <span class="font-semibold">${waveScore}–${oppScore}</span>`;
+                }
+                return `<section class="card rounded-xl p-3">
+                    <div class="flex items-baseline justify-between gap-2 flex-wrap">
+                        <h2 class="text-lg font-semibold">SD Wave</h2>
                         <span class="text-sm">${summary}</span>
                     </div>
                 </section>`;
