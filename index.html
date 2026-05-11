@@ -777,6 +777,8 @@
             // Weekend prep (every day except Sunday)
             if (showWeekendPrep) {
                 sections.push(await renderWeekendPrep());
+            } else if (dow === 0) {
+                sections.push(await renderDogBeachesToday(now));
             }
         }
 
@@ -1316,6 +1318,54 @@
                 <a class="section-link" href="https://samiprehn.github.io/sd_farmers_markets/" target="_blank" rel="noopener">full site ↗</a>
             </div>
             <div>${rows}</div>
+        </section>`;
+    }
+
+    async function renderDogBeachesToday(now) {
+        await Promise.all(DOG_BEACHES.map(b => fetchMeteo(b.lat, b.lon).catch(() => null)));
+        const rows = DOG_BEACHES.map(b => {
+            const meteo = meteoCache[`${b.lat},${b.lon}`];
+            if (!meteo) return `<tr><td class="px-2 py-1 text-xs text-slate-500" colspan="4">${b.name} — no data</td></tr>`;
+            const dIdx = dailyIndex(meteo.daily, now);
+            const noonIdx = indexAt(meteo.hourly, now, 12);
+            if (dIdx < 0) return `<tr><td class="px-2 py-1 text-xs text-slate-500" colspan="4">${b.name} —</td></tr>`;
+            const high = Math.round(meteo.daily.temperature_2m_max[dIdx]);
+            const dateStr = pacificISODate(now);
+            let peakIdx = -1, peakTemp = -Infinity;
+            for (let i = 0; i < meteo.hourly.time.length; i++) {
+                if (!meteo.hourly.time[i].startsWith(dateStr)) continue;
+                const t = meteo.hourly.temperature_2m[i];
+                if (t > peakTemp) { peakTemp = t; peakIdx = i; }
+            }
+            const feel = peakIdx >= 0 ? Math.round(meteo.hourly.apparent_temperature[peakIdx]) : null;
+            const code = noonIdx >= 0 ? meteo.hourly.weather_code[noonIdx] : meteo.daily.weather_code[dIdx];
+            const wind = noonIdx >= 0 ? Math.round(meteo.hourly.wind_speed_10m[noonIdx]) : Math.round(meteo.daily.wind_speed_10m_max[dIdx]);
+            const hum = noonIdx >= 0 ? Math.round(meteo.hourly.relative_humidity_2m[noonIdx]) : null;
+            return `<tr>
+                <td class="px-2 py-1 text-sm font-medium">${b.name}</td>
+                <td class="px-2 py-1 text-sm whitespace-nowrap"><span>${beachWeatherEmoji(code)}</span> <span class="font-semibold">${high}°</span>${feel != null ? `<span class="text-xs text-slate-400 ml-1">feels ${feel}°</span>` : ''}</td>
+                <td class="px-2 py-1 text-sm whitespace-nowrap">${wind} mph</td>
+                <td class="px-2 py-1 text-sm whitespace-nowrap">${hum != null ? hum + '%' : '—'}</td>
+            </tr>`;
+        }).join('');
+        return `<section class="card rounded-xl p-4">
+            <div class="flex items-baseline justify-between mb-2">
+                <div class="label">Dog beaches today</div>
+                <a class="section-link" href="https://samiprehn.github.io/sd_dog_beaches/" target="_blank" rel="noopener">full site ↗</a>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead>
+                        <tr class="text-xs text-slate-400 border-b border-white/10">
+                            <th class="px-2 py-1 text-left font-normal">Beach</th>
+                            <th class="px-2 py-1 text-left font-normal">High temp</th>
+                            <th class="px-2 py-1 text-left font-normal">Wind</th>
+                            <th class="px-2 py-1 text-left font-normal">Humidity</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
         </section>`;
     }
 
