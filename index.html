@@ -1157,14 +1157,14 @@
             if (!route || !route.summary) throw new Error('No route');
             const s = route.summary;
             const minutes = Math.round(s.travelTimeInSeconds / 60);
-            const trafficMinutes = s.trafficDelayInSeconds ? Math.round(s.trafficDelayInSeconds / 60) : 0;
-            const trafficNote = trafficMinutes >= 2
-                ? `<span class="text-xs text-orange-300 ml-2">+${trafficMinutes} min traffic</span>`
-                : '';
+            const freeFlowSec = s.noTrafficTravelTimeInSeconds || s.travelTimeInSeconds;
+            const freeFlowMin = Math.round(freeFlowSec / 60);
+            const ratio = s.travelTimeInSeconds / freeFlowSec;
+            const trafficColor = ratio > 2 ? 'text-red-400' : ratio > 1.5 ? 'text-yellow-300' : 'text-green-400';
             return `<section class="card rounded-xl p-4">
                 <div class="flex items-baseline justify-between gap-2 flex-wrap">
-                    <h2 class="text-lg font-semibold">🚗 ${directionLabel}${trafficNote}</h2>
-                    <div class="text-2xl font-bold">${minutes} <span class="text-sm font-normal text-slate-400">min</span></div>
+                    <h2 class="text-lg font-semibold">🚗 ${directionLabel} <span class="text-xs text-slate-400 ml-1">${freeFlowMin} min free-flow</span></h2>
+                    <div class="text-2xl font-bold ${trafficColor}">${minutes} <span class="text-sm font-normal text-slate-400">min</span></div>
                 </div>
             </section>`;
         } catch (e) {
