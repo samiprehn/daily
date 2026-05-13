@@ -745,6 +745,9 @@
         // ── Weather slots ─────────────────────────────────────────────
         sections.push(await renderWeather(now, isWeekend));
 
+        // ── Sunrise ──────────────────────────────────────────────────
+        sections.push(await renderSunrise(now));
+
         // ── Trash / recycling pickup ─────────────────────────────────
         sections.push(await renderTrash());
 
@@ -759,8 +762,7 @@
         // ── TV (favorite shows) ──────────────────────────────────────
         sections.push(await renderTV(now));
 
-        // ── Sunrise + Sunset ──────────────────────────────────────────
-        sections.push(await renderSunrise(now));
+        // ── Sunset ────────────────────────────────────────────────────
         sections.push(inSD ? await renderSunset(now) : await renderSunsetSimple(now));
 
         // ── Stargazing tonight ────────────────────────────────────────
