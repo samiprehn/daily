@@ -1450,35 +1450,33 @@
         const satMktList = satMkts.map(m => mktItem(m, sat)).join('');
         const sunMktList = sunMkts.map(m => mktItem(m, sun)).join('');
 
-        // Best sunset night: Sat vs Sun, only on Saturday (today vs tomorrow)
+        // Best sunset night: Sat vs Sun
         let sunsetBlock = '';
-        if (isSat) {
-            try {
-                const [satEval, sunEval] = await Promise.all([
-                    evaluateSunset(sat),
-                    evaluateSunset(sun),
-                ]);
-                const satRank = satEval.top ? GRADE_RANK[satEval.top.grade] : 99;
-                const sunRank = sunEval.top ? GRADE_RANK[sunEval.top.grade] : 99;
-                const winner = satRank <= sunRank
-                    ? { night: 'Saturday', sunset: satEval.sunset, top: satEval.top }
-                    : { night: 'Sunday',   sunset: sunEval.sunset, top: sunEval.top };
-                if (winner.top) {
-                    const gradeKey = winner.top.grade.replace('+', '\\+');
-                    sunsetBlock = `<div class="rounded-lg p-3 bg-slate-700/30 mb-3">
-                        <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Best sunset night</div>
-                        <div class="flex items-baseline justify-between">
-                            <div>
-                                <div class="font-semibold">${winner.night} · ${winner.top.name}</div>
-                                <div class="text-xs text-slate-400 mt-0.5">${winner.top.label} · ${winner.top.cloud}% clouds · ${fmtTime(winner.sunset)}</div>
-                            </div>
-                            <div class="text-3xl font-bold leading-none grade-${gradeKey}">${winner.top.grade}</div>
+        try {
+            const [satEval, sunEval] = await Promise.all([
+                evaluateSunset(sat),
+                evaluateSunset(sun),
+            ]);
+            const satRank = satEval.top ? GRADE_RANK[satEval.top.grade] : 99;
+            const sunRank = sunEval.top ? GRADE_RANK[sunEval.top.grade] : 99;
+            const winner = satRank <= sunRank
+                ? { night: 'Saturday', sunset: satEval.sunset, top: satEval.top }
+                : { night: 'Sunday',   sunset: sunEval.sunset, top: sunEval.top };
+            if (winner.top) {
+                const gradeKey = winner.top.grade.replace('+', '\\+');
+                sunsetBlock = `<div class="rounded-lg p-3 bg-slate-700/30 mb-3">
+                    <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Best sunset night</div>
+                    <div class="flex items-baseline justify-between">
+                        <div>
+                            <div class="font-semibold">${winner.night} · ${winner.top.name}</div>
+                            <div class="text-xs text-slate-400 mt-0.5">${winner.top.label} · ${winner.top.cloud}% clouds · ${fmtTime(winner.sunset)}</div>
                         </div>
-                    </div>`;
-                }
-            } catch (e) {
-                sunsetBlock = `<div class="text-slate-400 text-sm mb-3">Sunset forecast unavailable: ${e.message}</div>`;
+                        <div class="text-3xl font-bold leading-none grade-${gradeKey}">${winner.top.grade}</div>
+                    </div>
+                </div>`;
             }
+        } catch (e) {
+            sunsetBlock = `<div class="text-slate-400 text-sm mb-3">Sunset forecast unavailable: ${e.message}</div>`;
         }
 
         // Best stargazing: Sat vs Sun, top site of each
