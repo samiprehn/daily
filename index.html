@@ -425,6 +425,17 @@
         const d = String(date.getDate()).padStart(2, '0');
         return daily.time.indexOf(`${y}-${mo}-${d}`);
     }
+    // Index of the hour that produced the daily high (for "feels like at peak").
+    function peakHourIndex(hourly, date) {
+        const dateStr = pacificISODate(date);
+        let peakIdx = -1, peakTemp = -Infinity;
+        for (let i = 0; i < hourly.time.length; i++) {
+            if (!hourly.time[i].startsWith(dateStr)) continue;
+            const t = hourly.temperature_2m[i];
+            if (t > peakTemp) { peakTemp = t; peakIdx = i; }
+        }
+        return peakIdx;
+    }
     function weatherEmoji(code) {
         if (code === 0) return '☀️';
         if (code === 1) return '🌤️';
@@ -700,11 +711,9 @@
                 const recyclingNext = f.recycling_next.value;
                 const showsRaw = (f.shows ? f.shows.value.trim() : '');
                 const showNames = showsRaw ? showsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
-                const shows = [];
-                for (const name of showNames) {
-                    try { shows.push(await tvmazeSearch(name)); }
-                    catch (e) { /* skip not-found shows silently */ }
-                }
+                const shows = (await Promise.all(
+                    showNames.map(name => tvmazeSearch(name).catch(() => null))
+                )).filter(Boolean);
                 const teamsRaw = (f.teams ? f.teams.value.trim() : '');
                 const teamNames = teamsRaw ? teamsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
                 const teams = teamNames.map(name => ({ name }));
@@ -727,6 +736,7 @@
     }
 
     // ── Main ──────────────────────────────────────────────────────────
+    let tickInterval = null;
     async function run() {
         if (!LOCATIONS) { renderSetup(); return; }
         const inSD = isInSDCounty(LOCATIONS.home) || isInSDCounty(LOCATIONS.work);
@@ -737,52 +747,26 @@
 
         document.getElementById('dateLine').textContent = fmtDay(now);
         updateClock();
-        // Tick every minute so the time + sun position stay current.
-        setInterval(() => { updateClock(); updateSunIcon(); }, 60000);
+        if (tickInterval) clearInterval(tickInterval);
+        tickInterval = setInterval(() => { updateClock(); updateSunIcon(); }, 60000);
 
-        const sections = [];
-
-        // ── Weather slots ─────────────────────────────────────────────
-        sections.push(await renderWeather(now, isWeekend));
-
-        // ── Sunrise ──────────────────────────────────────────────────
-        sections.push(await renderSunrise(now));
-
-        // ── Trash / recycling pickup ─────────────────────────────────
-        sections.push(await renderTrash());
-
-        // ── Commute (weekdays only) ──────────────────────────────────
-        if (!isWeekend) {
-            sections.push(await renderCommute(now));
-        }
-
-        // ── Sports (configured teams) ────────────────────────────────
-        sections.push(await renderSports(now));
-
-        // ── TV (favorite shows) ──────────────────────────────────────
-        sections.push(await renderTV(now));
-
-        // ── Sunset ────────────────────────────────────────────────────
-        sections.push(inSD ? await renderSunset(now) : await renderSunsetSimple(now));
-
-        // ── Stargazing tonight ────────────────────────────────────────
-        sections.push(inSD ? await renderStargaze(now) : await renderStargazeSimple(now));
-
-        // ── SD-only sections: farmers markets + weekend prep ─────────
-        if (inSD) {
+        const jobs = [
+            renderWeather(now, isWeekend),
+            renderSunrise(now),
+            renderTrash(),
+            !isWeekend ? renderCommute(now) : null,
+            renderSports(now),
+            renderTV(now),
+            inSD ? renderSunset(now) : renderSunsetSimple(now),
+            inSD ? renderStargaze(now) : renderStargazeSimple(now),
             // Farmers markets today: skip on Saturday only (weekend prep covers
             // Sat/Sun markets that day). Sunday still shows today's markets
             // because weekend prep is hidden then.
-            if (dow !== 6) {
-                sections.push(await renderFarmers(now));
-            }
-            // Weekend prep (every day except Sunday)
-            if (showWeekendPrep) {
-                sections.push(await renderWeekendPrep());
-            } else if (dow === 0) {
-                sections.push(await renderDogBeachesToday(now));
-            }
-        }
+            inSD && dow !== 6 ? renderFarmers(now) : null,
+            inSD && showWeekendPrep ? renderWeekendPrep() :
+                (inSD && dow === 0 ? renderDogBeachesToday(now) : null),
+        ];
+        const sections = (await Promise.all(jobs)).filter(Boolean);
 
         document.getElementById('content').innerHTML = sections.join('');
         // SVGs only exist after innerHTML is set; populate them now.
@@ -805,9 +789,7 @@
               ];
 
         try {
-            // Fetch all unique coords in parallel
             const uniqLocs = [...new Map(slots.map(s => [`${s.loc.lat},${s.loc.lon}`, s.loc])).values()];
-            if (!uniqLocs.find(l => l.lat === HOME.lat && l.lon === HOME.lon)) uniqLocs.push(HOME);
             await Promise.all(uniqLocs.map(l => fetchMeteo(l.lat, l.lon)));
 
             const cards = slots.map(s => {
@@ -1183,7 +1165,6 @@
         try {
             const { sunset, top } = await evaluateSunset(now);
 
-            const gradeKey = top ? top.grade.replace('+', '\\+') : 'D';
             return `<section class="card rounded-xl p-4">
                 <div class="flex items-baseline justify-between mb-2">
                     <div class="flex items-baseline gap-3">
@@ -1204,7 +1185,7 @@
                                 <circle id="sunDisc" cx="50" cy="60" r="13" fill="url(#dailySun)" clip-path="url(#dailySkyClip)"/>
                                 <line x1="0" y1="55" x2="100" y2="55" stroke="rgba(0,0,0,0.55)" stroke-width="1.6"/>
                             </svg>
-                            <div class="text-5xl font-bold leading-none grade-${top.grade.replace('+', '\\+').replace('-', '-')}" style="font-feature-settings:'tnum'">${top.grade}</div>
+                            <div class="text-5xl font-bold leading-none grade-${top.grade}" style="font-feature-settings:'tnum'">${top.grade}</div>
                         </div>
                     </div>
                 ` : `<div class="text-slate-400 text-sm">No forecast available.</div>`}
@@ -1271,6 +1252,45 @@
         }
     }
 
+    // Shared by renderFarmers + renderWeekendPrep
+    function marketWeatherInfo(m, date) {
+        const c = MARKET_ZIP_COORDS[m.zip];
+        const meteo = c ? meteoCache[`${c[0]},${c[1]}`] : null;
+        const oh = getOpenHours(m, date);
+        if (!meteo || !oh) return null;
+        const midHour = Math.round((oh.open + oh.close) / 2);
+        const idx = indexAt(meteo.hourly, date, midHour);
+        if (idx < 0) return null;
+        const uv = Math.round(meteo.hourly.uv_index[idx]);
+        return {
+            apparent: Math.round(meteo.hourly.apparent_temperature[idx]),
+            code: meteo.hourly.weather_code[idx],
+            uv,
+            uvL: uvLabel(uv),
+        };
+    }
+
+    // Shared by renderDogBeachesToday + renderWeekendPrep. Returns the inner
+    // <td>s for beach/high/wind/humidity, or null when no data is available.
+    function beachWeatherCells(b, date) {
+        const meteo = meteoCache[`${b.lat},${b.lon}`];
+        if (!meteo) return null;
+        const dIdx = dailyIndex(meteo.daily, date);
+        if (dIdx < 0) return null;
+        const noonIdx = indexAt(meteo.hourly, date, 12);
+        const peakIdx = peakHourIndex(meteo.hourly, date);
+        const high = Math.round(meteo.daily.temperature_2m_max[dIdx]);
+        const feel = peakIdx >= 0 ? Math.round(meteo.hourly.apparent_temperature[peakIdx]) : null;
+        // Use the noon hour's weather_code rather than the daily aggregate (matches sd_dog_beaches).
+        const code = noonIdx >= 0 ? meteo.hourly.weather_code[noonIdx] : meteo.daily.weather_code[dIdx];
+        const wind = noonIdx >= 0 ? Math.round(meteo.hourly.wind_speed_10m[noonIdx]) : Math.round(meteo.daily.wind_speed_10m_max[dIdx]);
+        const hum = noonIdx >= 0 ? Math.round(meteo.hourly.relative_humidity_2m[noonIdx]) : null;
+        return `<td class="px-2 py-1 text-sm font-medium">${b.name}</td>
+            <td class="px-2 py-1 text-sm whitespace-nowrap"><span>${beachWeatherEmoji(code)}</span> <span class="font-semibold">${high}°</span>${feel != null ? `<span class="text-xs text-slate-400 ml-1">feels ${feel}°</span>` : ''}</td>
+            <td class="px-2 py-1 text-sm whitespace-nowrap">${wind} mph</td>
+            <td class="px-2 py-1 text-sm whitespace-nowrap">${hum != null ? hum + '%' : '—'}</td>`;
+    }
+
     async function renderFarmers(now) {
         const dow = now.getDay();
         const today = MARKETS.filter(m => m.day === dow && isMarketActive(m, now));
@@ -1280,7 +1300,6 @@
                 <p class="text-slate-400 text-sm mt-2">No markets scheduled today.</p>
             </section>`;
         }
-        // Fetch weather for each unique market zip
         const zips = [...new Set(today.map(m => m.zip))];
         await Promise.all(zips.map(z => {
             const c = MARKET_ZIP_COORDS[z];
@@ -1288,23 +1307,10 @@
         }));
 
         const rows = today.map(m => {
-            const c = MARKET_ZIP_COORDS[m.zip];
-            const meteo = c ? meteoCache[`${c[0]},${c[1]}`] : null;
-            const oh = getOpenHours(m, now);
-            let weatherBit = '';
-            if (meteo && oh) {
-                const midHour = Math.round((oh.open + oh.close) / 2);
-                const idx = indexAt(meteo.hourly, now, midHour);
-                if (idx >= 0) {
-                    const apparent = Math.round(meteo.hourly.apparent_temperature[idx]);
-                    const code = meteo.hourly.weather_code[idx];
-                    const uv = Math.round(meteo.hourly.uv_index[idx]);
-                    const uvL = uvLabel(uv);
-                    weatherBit = `<span class="text-base">${weatherEmoji(code)}</span>
-                        <span class="text-sm">${apparent}°</span>
-                        ${uvL ? `<span class="text-xs" style="color:${uvL.color}">UV ${uv}</span>` : ''}`;
-                }
-            }
+            const w = marketWeatherInfo(m, now);
+            const weatherBit = w ? `<span class="text-base">${weatherEmoji(w.code)}</span>
+                <span class="text-sm">${w.apparent}°</span>
+                ${w.uvL ? `<span class="text-xs" style="color:${w.uvL.color}">UV ${w.uv}</span>` : ''}` : '';
             return `<div class="flex items-center gap-3 py-1.5 border-b border-white/5 last:border-0">
                 <div class="flex-1 min-w-0">
                     <div class="font-medium">${m.name} ${m.dogFriendly ? '<span class="text-xs">🐕</span>' : ''}</div>
@@ -1326,29 +1332,10 @@
     async function renderDogBeachesToday(now) {
         await Promise.all(DOG_BEACHES.map(b => fetchMeteo(b.lat, b.lon).catch(() => null)));
         const rows = DOG_BEACHES.map(b => {
-            const meteo = meteoCache[`${b.lat},${b.lon}`];
-            if (!meteo) return `<tr><td class="px-2 py-1 text-xs text-slate-500" colspan="4">${b.name} — no data</td></tr>`;
-            const dIdx = dailyIndex(meteo.daily, now);
-            const noonIdx = indexAt(meteo.hourly, now, 12);
-            if (dIdx < 0) return `<tr><td class="px-2 py-1 text-xs text-slate-500" colspan="4">${b.name} —</td></tr>`;
-            const high = Math.round(meteo.daily.temperature_2m_max[dIdx]);
-            const dateStr = pacificISODate(now);
-            let peakIdx = -1, peakTemp = -Infinity;
-            for (let i = 0; i < meteo.hourly.time.length; i++) {
-                if (!meteo.hourly.time[i].startsWith(dateStr)) continue;
-                const t = meteo.hourly.temperature_2m[i];
-                if (t > peakTemp) { peakTemp = t; peakIdx = i; }
-            }
-            const feel = peakIdx >= 0 ? Math.round(meteo.hourly.apparent_temperature[peakIdx]) : null;
-            const code = noonIdx >= 0 ? meteo.hourly.weather_code[noonIdx] : meteo.daily.weather_code[dIdx];
-            const wind = noonIdx >= 0 ? Math.round(meteo.hourly.wind_speed_10m[noonIdx]) : Math.round(meteo.daily.wind_speed_10m_max[dIdx]);
-            const hum = noonIdx >= 0 ? Math.round(meteo.hourly.relative_humidity_2m[noonIdx]) : null;
-            return `<tr>
-                <td class="px-2 py-1 text-sm font-medium">${b.name}</td>
-                <td class="px-2 py-1 text-sm whitespace-nowrap"><span>${beachWeatherEmoji(code)}</span> <span class="font-semibold">${high}°</span>${feel != null ? `<span class="text-xs text-slate-400 ml-1">feels ${feel}°</span>` : ''}</td>
-                <td class="px-2 py-1 text-sm whitespace-nowrap">${wind} mph</td>
-                <td class="px-2 py-1 text-sm whitespace-nowrap">${hum != null ? hum + '%' : '—'}</td>
-            </tr>`;
+            const cells = beachWeatherCells(b, now);
+            return cells
+                ? `<tr>${cells}</tr>`
+                : `<tr><td class="px-2 py-1 text-xs text-slate-500" colspan="4">${b.name} — no data</td></tr>`;
         }).join('');
         return `<section class="card rounded-xl p-4">
             <div class="flex items-baseline justify-between mb-2">
@@ -1382,31 +1369,11 @@
         await Promise.all(DOG_BEACHES.map(b => fetchMeteo(b.lat, b.lon).catch(() => null)));
 
         function beachRow(b, date, dayLabel, extraClass = '') {
-            const meteo = meteoCache[`${b.lat},${b.lon}`];
-            if (!meteo) return `<tr class="${extraClass}"><td class="px-2 py-1 text-xs text-slate-500" colspan="5">${b.name} ${dayLabel} — no data</td></tr>`;
-            const dIdx = dailyIndex(meteo.daily, date);
-            const noonIdx = indexAt(meteo.hourly, date, 12);
-            if (dIdx < 0) return `<tr class="${extraClass}"><td class="px-2 py-1 text-xs text-slate-500" colspan="5">${b.name} ${dayLabel} —</td></tr>`;
-            const high = Math.round(meteo.daily.temperature_2m_max[dIdx]);
-            // Find the hour that produced the daily high, then read apparent_temperature at that hour
-            const dateStr = pacificISODate(date);
-            let peakIdx = -1, peakTemp = -Infinity;
-            for (let i = 0; i < meteo.hourly.time.length; i++) {
-                if (!meteo.hourly.time[i].startsWith(dateStr)) continue;
-                const t = meteo.hourly.temperature_2m[i];
-                if (t > peakTemp) { peakTemp = t; peakIdx = i; }
-            }
-            const feel = peakIdx >= 0 ? Math.round(meteo.hourly.apparent_temperature[peakIdx]) : null;
-            // Match sd_dog_beaches: use the noon-hour weather_code, not the daily aggregate
-            const code = noonIdx >= 0 ? meteo.hourly.weather_code[noonIdx] : meteo.daily.weather_code[dIdx];
-            const wind = noonIdx >= 0 ? Math.round(meteo.hourly.wind_speed_10m[noonIdx]) : Math.round(meteo.daily.wind_speed_10m_max[dIdx]);
-            const hum = noonIdx >= 0 ? Math.round(meteo.hourly.relative_humidity_2m[noonIdx]) : null;
+            const cells = beachWeatherCells(b, date);
+            if (!cells) return `<tr class="${extraClass}"><td class="px-2 py-1 text-xs text-slate-500" colspan="5">${b.name} ${dayLabel} — no data</td></tr>`;
             return `<tr class="${extraClass}">
                 <td class="px-2 py-1 text-xs text-slate-400">${dayLabel}</td>
-                <td class="px-2 py-1 text-sm font-medium">${b.name}</td>
-                <td class="px-2 py-1 text-sm whitespace-nowrap"><span>${beachWeatherEmoji(code)}</span> <span class="font-semibold">${high}°</span>${feel != null ? `<span class="text-xs text-slate-400 ml-1">feels ${feel}°</span>` : ''}</td>
-                <td class="px-2 py-1 text-sm whitespace-nowrap">${wind} mph</td>
-                <td class="px-2 py-1 text-sm whitespace-nowrap">${hum != null ? hum + '%' : '—'}</td>
+                ${cells}
             </tr>`;
         }
         // Bottom-border on the last Sat row to separate Sat from Sun in the table.
@@ -1414,11 +1381,9 @@
         const sunRows = DOG_BEACHES.map(b => beachRow(b, sun, 'Sun'));
         const beachRows = [...satRows, ...sunRows].join('');
 
-        // Markets Sat/Sun
         const satMkts = MARKETS.filter(m => m.day === 6 && isMarketActive(m, sat));
         const sunMkts = MARKETS.filter(m => m.day === 0 && isMarketActive(m, sun));
 
-        // Fetch weather for all unique market ZIPs across the weekend in parallel
         const mktZips = [...new Set([...satMkts, ...sunMkts].map(m => m.zip))];
         await Promise.all(mktZips.map(z => {
             const c = MARKET_ZIP_COORDS[z];
@@ -1426,21 +1391,10 @@
         }));
 
         const mktItem = (m, date) => {
-            const c = MARKET_ZIP_COORDS[m.zip];
-            const meteo = c ? meteoCache[`${c[0]},${c[1]}`] : null;
-            const oh = getOpenHours(m, date);
-            let weatherBit = '';
-            if (meteo && oh) {
-                const midHour = Math.round((oh.open + oh.close) / 2);
-                const idx = indexAt(meteo.hourly, date, midHour);
-                if (idx >= 0) {
-                    const apparent = Math.round(meteo.hourly.apparent_temperature[idx]);
-                    const code = meteo.hourly.weather_code[idx];
-                    const uv = Math.round(meteo.hourly.uv_index[idx]);
-                    const uvL = uvLabel(uv);
-                    weatherBit = `<span>${weatherEmoji(code)}</span> <span>${apparent}°</span>${uvL ? ` <span class="text-xs" style="color:${uvL.color}">UV ${uv}</span>` : ''}`;
-                }
-            }
+            const w = marketWeatherInfo(m, date);
+            const weatherBit = w
+                ? `<span>${weatherEmoji(w.code)}</span> <span>${w.apparent}°</span>${w.uvL ? ` <span class="text-xs" style="color:${w.uvL.color}">UV ${w.uv}</span>` : ''}`
+                : '';
             return `<li class="flex items-baseline gap-2 py-0.5">
                 <div class="flex-1 min-w-0">
                     <span class="text-sm font-medium">${m.name}</span>${m.dogFriendly ? ' <span class="text-xs">🐕</span>' : ''}
@@ -1465,7 +1419,6 @@
                 ? { night: 'Saturday', sunset: satEval.sunset, top: satEval.top }
                 : { night: 'Sunday',   sunset: sunEval.sunset, top: sunEval.top };
             if (winner.top) {
-                const gradeKey = winner.top.grade.replace('+', '\\+');
                 sunsetBlock = `<div class="rounded-lg p-3 bg-slate-700/30 mb-3">
                     <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Best sunset night</div>
                     <div class="flex items-baseline justify-between">
@@ -1473,7 +1426,7 @@
                             <div class="font-semibold">${winner.night} · ${winner.top.name}</div>
                             <div class="text-xs text-slate-400 mt-0.5">${winner.top.label} · ${winner.top.cloud}% clouds · ${fmtTime(winner.sunset)}</div>
                         </div>
-                        <div class="text-3xl font-bold leading-none grade-${gradeKey}">${winner.top.grade}</div>
+                        <div class="text-3xl font-bold leading-none grade-${winner.top.grade}">${winner.top.grade}</div>
                     </div>
                 </div>`;
             }
