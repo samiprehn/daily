@@ -757,6 +757,7 @@
             !isWeekend ? renderCommute(now) : null,
             renderSports(now),
             renderTV(now),
+            renderLottery(),
             inSD ? renderSunset(now) : renderSunsetSimple(now),
             inSD ? renderStargaze(now) : renderStargazeSimple(now),
             // Farmers markets today: skip on Saturday only (weekend prep covers
@@ -853,6 +854,47 @@
             </section>`;
         } catch (e) {
             return `<section class="card rounded-xl p-3"><h2 class="text-lg font-semibold">Sunrise</h2><span class="text-sm text-slate-400">${e.message}</span></section>`;
+        }
+    }
+
+    const LOTTERY_GAMES = [
+        { id: 8, label: 'SuperLotto' },
+        { id: 10, label: 'Fantasy 5' },
+    ];
+
+    function fmtJackpot(amt) {
+        if (amt >= 1e6) {
+            const m = amt / 1e6;
+            return `$${m % 1 ? m.toFixed(1) : m}M`;
+        }
+        return `$${Math.round(amt / 1000)}K`;
+    }
+
+    async function renderLottery() {
+        try {
+            const results = await Promise.all(LOTTERY_GAMES.map(g =>
+                fetch(`https://www.calottery.com/api/DrawGameApi/DrawGamePastDrawResults/${g.id}/1/1`)
+                    .then(r => r.json()).catch(() => null)
+            ));
+            const parts = LOTTERY_GAMES.map((g, i) => {
+                const nd = results[i] && results[i].NextDraw;
+                if (!nd || nd.JackpotAmount == null) return null;
+                const draw = new Date(nd.DrawDate);
+                const today = new Date();
+                const day = draw.toDateString() === today.toDateString()
+                    ? 'tonight'
+                    : draw.toLocaleDateString('en-US', { weekday: 'short' });
+                return `<span class="whitespace-nowrap">${g.label} <span class="font-semibold" style="color:#86efac">${fmtJackpot(nd.JackpotAmount)}</span> <span class="text-slate-400">${day}</span></span>`;
+            }).filter(Boolean);
+            if (!parts.length) return null;
+            return `<section class="card rounded-xl p-3">
+                <div class="flex items-baseline justify-between gap-4 flex-wrap">
+                    <h2 class="text-lg font-semibold">Lottery</h2>
+                    <span class="text-sm text-slate-200 flex gap-4 flex-wrap">${parts.join('')}</span>
+                </div>
+            </section>`;
+        } catch (e) {
+            return null;
         }
     }
 
