@@ -71,8 +71,8 @@
             const raw = localStorage.getItem(LOCATIONS_KEY);
             if (!raw) return null;
             const parsed = JSON.parse(raw);
-            if (parsed && parsed.home && parsed.work
-                && typeof parsed.home.lat === 'number' && typeof parsed.work.lat === 'number') {
+            if (parsed && parsed.home && typeof parsed.home.lat === 'number'
+                && (!parsed.work || typeof parsed.work.lat === 'number')) {
                 return parsed;
             }
         } catch (e) {}
@@ -598,7 +598,8 @@
         const content = document.getElementById('content');
         const ex = existing || {};
         const sched = ex.schedule || {};
-        const fieldGroup = (kind, displayName) => {
+        const fieldGroup = (kind, displayName, optional = false) => {
+            const req = optional ? '' : 'required';
             const cur = ex[kind] || {};
             // Try to parse a previously stored address back into parts. Best-effort.
             const m = cur.address ? cur.address.match(/^(.+?),\s*(.+?),\s*([A-Z]{2})\s+(\d{5})/) : null;
@@ -612,7 +613,7 @@
                 <div class="space-y-3">
                     <label class="block">
                         <span class="text-xs text-slate-400">Street</span>
-                        <input name="${kind}_street" type="text" required value="${street}"
+                        <input name="${kind}_street" type="text" ${req} value="${street}"
                             autocomplete="section-${kind} address-line1"
                             class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400"
                             placeholder="123 Main St">
@@ -620,20 +621,20 @@
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <label class="block">
                             <span class="text-xs text-slate-400">City</span>
-                            <input name="${kind}_city" type="text" required value="${city}"
+                            <input name="${kind}_city" type="text" ${req} value="${city}"
                                 autocomplete="section-${kind} address-level2"
                                 class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
                         </label>
                         <label class="block">
                             <span class="text-xs text-slate-400">State</span>
-                            <input name="${kind}_state" type="text" required maxlength="2" value="${state}"
+                            <input name="${kind}_state" type="text" ${req} maxlength="2" value="${state}"
                                 autocomplete="section-${kind} address-level1"
                                 class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400 uppercase"
                                 placeholder="CA">
                         </label>
                         <label class="block">
                             <span class="text-xs text-slate-400">ZIP</span>
-                            <input name="${kind}_zip" type="text" required inputmode="numeric" value="${zip}"
+                            <input name="${kind}_zip" type="text" ${req} inputmode="numeric" value="${zip}"
                                 autocomplete="section-${kind} postal-code"
                                 class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
                         </label>
@@ -685,7 +686,7 @@
                 ${error ? `<p class="text-sm text-red-400 mb-3">${error}</p>` : ''}
                 <form id="locForm" class="space-y-4">
                     ${fieldGroup('home', 'Home')}
-                    ${fieldGroup('work', 'Work')}
+                    ${fieldGroup('work', 'Work (optional — leave blank to use home all day)', true)}
                     ${scheduleGroup}
                     ${showsGroup}
                     ${teamsGroup}
@@ -702,10 +703,11 @@
             const workParts = { street: f.work_street.value.trim(), city: f.work_city.value.trim(), state: f.work_state.value.trim().toUpperCase(), zip: f.work_zip.value.trim() };
             const homeAddr = `${homeParts.street}, ${homeParts.city}, ${homeParts.state} ${homeParts.zip}`;
             const workAddr = `${workParts.street}, ${workParts.city}, ${workParts.state} ${workParts.zip}`;
+            const hasWork = Object.values(workParts).some(Boolean);
             try {
                 const [home, work] = await Promise.all([
                     geocodeAddress(homeAddr),
-                    geocodeAddress(workAddr),
+                    hasWork ? geocodeAddress(workAddr) : null,
                 ]);
                 const trashDay = f.trash_day.value;
                 const recyclingNext = f.recycling_next.value;
@@ -719,7 +721,7 @@
                 const teams = teamNames.map(name => ({ name }));
                 saveLocations({
                     home: { ...home, ...homeParts, label: 'Home' },
-                    work: { ...work, ...workParts, label: 'Work' },
+                    work: hasWork ? { ...work, ...workParts, label: 'Work' } : null,
                     schedule: {
                         trashDay: trashDay === '' ? null : Number(trashDay),
                         recyclingNext: recyclingNext || null,
@@ -739,7 +741,7 @@
     let tickInterval = null;
     async function run() {
         if (!LOCATIONS) { renderSetup(); return; }
-        const inSD = isInSDCounty(LOCATIONS.home) || isInSDCounty(LOCATIONS.work);
+        const inSD = isInSDCounty(LOCATIONS.home) || (LOCATIONS.work && isInSDCounty(LOCATIONS.work));
         const now = new Date();
         const dow = now.getDay();
         const isWeekend = dow === 0 || dow === 6;
@@ -754,7 +756,7 @@
             renderWeather(now, isWeekend),
             renderSunrise(now),
             renderTrash(),
-            !isWeekend ? renderCommute(now) : null,
+            !isWeekend && LOCATIONS.work ? renderCommute(now) : null,
             renderSports(now),
             renderTV(now),
             renderLottery(),
@@ -776,7 +778,7 @@
     }
 
     async function renderWeather(now, isWeekend) {
-        const HOME = LOCATIONS.home, WORK = LOCATIONS.work;
+        const HOME = LOCATIONS.home, WORK = LOCATIONS.work || LOCATIONS.home;
         const slots = isWeekend
             ? [
                 { hour: 8,  loc: HOME, label: '8am' },
@@ -860,16 +862,16 @@
     const LOTTERY_GAMES = [
         { id: 8, label: 'SuperLotto' },
         { id: 10, label: 'Fantasy 5' },
-        // $2/play at 1-in-292,201,338 jackpot odds: only show when the
-        // jackpot beats the break-even price of a ticket (2 × odds).
+        // Only show when the jackpot beats the break-even price of a
+        // ticket (cost × jackpot odds).
         { id: 12, label: 'Powerball', minJackpot: 2 * 292201338 },
+        { id: 15, label: 'Mega Millions', minJackpot: 5 * 290472336 },
     ];
 
     function fmtJackpot(amt) {
-        if (amt >= 1e6) {
-            const m = amt / 1e6;
-            return `$${m % 1 ? m.toFixed(1) : m}M`;
-        }
+        const scaled = (v, suffix) => `$${v % 1 ? v.toFixed(1) : v}${suffix}`;
+        if (amt >= 1e9) return scaled(amt / 1e9, 'B');
+        if (amt >= 1e6) return scaled(amt / 1e6, 'M');
         return `$${Math.round(amt / 1000)}K`;
     }
 
