@@ -125,14 +125,14 @@
 
     // ── Sites: stargazing (mirrors stargaze) ──────────────────────────
     const STAR_SITES = [
-        { name: 'Mt Laguna',         lat: 32.8694, lon: -116.4192, grid: 'SGX/85,16', bortle: 3, driveMin: 60 },
-        { name: 'Borrego Springs',   lat: 33.2588, lon: -116.3742, grid: 'SGX/89,33', bortle: 2, driveMin: 120 },
-        { name: 'Palomar Mountain',  lat: 33.3597, lon: -116.8639, grid: 'SGX/72,40', bortle: 3, driveMin: 95 },
-        { name: 'Cuyamaca Rancho',   lat: 32.9486, lon: -116.5894, grid: 'SGX/79,21', bortle: 3, driveMin: 60 },
-        { name: 'Julian',            lat: 33.0786, lon: -116.6022, grid: 'SGX/80,26', bortle: 4, driveMin: 75 },
-        { name: 'Pine Valley',       lat: 32.7553, lon: -116.6094, grid: 'SGX/77,12', bortle: 4, driveMin: 50 },
-        { name: 'Los Peñasquitos Ranch House', lat: 32.9244, lon: -117.1289, grid: 'SGX/59,23', bortle: 6, driveMin: 25 },
-        { name: 'Kumeyaay Lake',     lat: 32.8418, lon: -117.0359, grid: 'SGX/62,19', bortle: 6, driveMin: 25 },
+        { name: 'Mt Laguna',         lat: 32.8694, lon: -116.4192, bortle: 3, driveMin: 60 },
+        { name: 'Borrego Springs',   lat: 33.2588, lon: -116.3742, bortle: 2, driveMin: 120 },
+        { name: 'Palomar Mountain',  lat: 33.3597, lon: -116.8639, bortle: 3, driveMin: 95 },
+        { name: 'Cuyamaca Rancho',   lat: 32.9486, lon: -116.5894, bortle: 3, driveMin: 60 },
+        { name: 'Julian',            lat: 33.0786, lon: -116.6022, bortle: 4, driveMin: 75 },
+        { name: 'Pine Valley',       lat: 32.7553, lon: -116.6094, bortle: 4, driveMin: 50 },
+        { name: 'Los Peñasquitos Ranch House', lat: 32.9244, lon: -117.1289, bortle: 6, driveMin: 25 },
+        { name: 'Kumeyaay Lake',     lat: 32.8418, lon: -117.0359, bortle: 6, driveMin: 25 },
     ];
     const WINDOW_START_HOUR = 20; // 8pm
     const WINDOW_END_HOUR = 24;   // midnight
@@ -249,32 +249,6 @@
     }
 
     // ── NWS gridpoint helpers ─────────────────────────────────────────
-    function parseDuration(iso) {
-        const m = iso.match(/P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?/);
-        if (!m) return 0;
-        return ((+(m[1]||0)*24 + +(m[2]||0))*60 + +(m[3]||0)) * 60000;
-    }
-    function valueAt(values, target) {
-        for (const e of values) {
-            const [s, dur] = e.validTime.split('/');
-            const start = new Date(s).getTime();
-            if (target >= start && target < start + parseDuration(dur)) return e.value;
-        }
-        return null;
-    }
-    const nwsGridCache = {};
-    async function fetchGrid(grid) {
-        if (nwsGridCache[grid]) return nwsGridCache[grid];
-        const r = await fetch(`https://api.weather.gov/gridpoints/${grid}`);
-        if (!r.ok) throw new Error(`NWS ${grid}: ${r.status}`);
-        const d = await r.json();
-        const out = {
-            skyCover: (d.properties?.skyCover?.values) || [],
-            weather:  (d.properties?.weather?.values)  || [],
-        };
-        nwsGridCache[grid] = out;
-        return out;
-    }
     // ── Sunset scoring (mirrors sd_sunset) ────────────────────────────
     // score (0-100) = canvas × light:
     //   canvas — high/mid clouds overhead that can catch post-sunset color;
@@ -341,39 +315,66 @@
     }
 
     // ── Stargazing scoring (mirrors stargaze) ─────────────────────────
+    // Per 15-min astro-dark sample: cloudFactor × moonFactor partial credit.
+    // Sky score = quality hours × Bortle bonus; drive penalty is ranking-only.
+    let _starCloudPromise = null;
+    function fetchStarCloudLayers() {
+        if (!_starCloudPromise) {
+            const lats = STAR_SITES.map(s => s.lat).join(',');
+            const lons = STAR_SITES.map(s => s.lon).join(',');
+            // weather_code included only because the shared cloudsAt() reads it.
+            _starCloudPromise = fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code&forecast_days=7&timezone=America%2FLos_Angeles`)
+                .then(r => { if (!r.ok) throw new Error(`Open-Meteo: ${r.status}`); return r.json(); });
+        }
+        return _starCloudPromise;
+    }
     function bortleBonus(b) { return Math.max(0.3, 1 - (b - 2) * 0.15); }
-    function scoreStargazeNight(skyValues, lat, lon, bortle, nightStart) {
+    function starCloudFactor(c) {
+        const lowMid = Math.min(100, c.low + c.mid);
+        return ((1 - lowMid / 100) ** 2) * (1 - 0.4 * c.high / 100);
+    }
+    function starMoonFactor(date, lat, lon) {
+        const altDeg = moonAltitude(date, lat, lon) * (180 / PI);
+        if (altDeg <= 0) return 1;
+        return 1 - moonIllumination(date) * Math.min(1, altDeg / 40);
+    }
+    // Weeknights (incl. Friday): close sites should win — long drives only
+    // pay off on Saturday/Sunday nights.
+    function starDriveFactor(driveMin, nightDate) {
+        const dow = nightDate.getDay();
+        if (dow === 6 || dow === 0) return 1;
+        return 1 / (1 + (driveMin / 60) ** 2);
+    }
+    function scoreStargazeNight(siteResult, lat, lon, bortle, nightStart) {
         const STEP_MIN = 15;
         const HOURS = STEP_MIN / 60;
         const wsMs = nightStart + (WINDOW_START_HOUR - 12) * 3600000;
         const weMs = nightStart + (WINDOW_END_HOUR - 12) * 3600000;
         const samples = Math.round((weMs - wsMs) / (STEP_MIN * 60000));
-        let darkH = 0, clearDarkH = 0, totalCloud = 0, cloudSamples = 0;
+        let darkH = 0, qualityH = 0, totalCloud = 0, cloudSamples = 0;
         let moonUpDuringDarkH = 0, moonIllumSum = 0, moonIllumWeight = 0;
         let darkStart = null, darkEnd = null;
         for (let i = 0; i < samples; i++) {
             const t = wsMs + i * STEP_MIN * 60000;
             const date = new Date(t);
             if (sunAltitude(date, lat, lon) * (180/PI) >= -18) continue;
-            const cloud = valueAt(skyValues, t);
-            if (cloud == null) continue;
-            const moonAlt = moonAltitude(date, lat, lon) * (180/PI);
-            if (moonAlt > 0) {
-                moonUpDuringDarkH += HOURS;
-                moonIllumSum += moonIllumination(date);
-                moonIllumWeight++;
-                continue;
-            }
+            const c = cloudsAt(siteResult, date);
+            if (c === null) continue;
             darkH += HOURS;
             if (darkStart === null) darkStart = t;
             darkEnd = t + STEP_MIN * 60000;
-            totalCloud += cloud;
+            totalCloud += Math.min(100, c.low + c.mid + 0.4 * c.high);
             cloudSamples++;
-            clearDarkH += (1 - cloud/100) * HOURS;
+            if (moonAltitude(date, lat, lon) > 0) {
+                moonUpDuringDarkH += HOURS;
+                moonIllumSum += moonIllumination(date);
+                moonIllumWeight++;
+            }
+            qualityH += starCloudFactor(c) * starMoonFactor(date, lat, lon) * HOURS;
         }
         return {
-            score: clearDarkH * bortleBonus(bortle),
-            darkH, clearDarkH,
+            score: qualityH * bortleBonus(bortle),
+            darkH, qualityH,
             avgCloud: cloudSamples ? totalCloud / cloudSamples : null,
             moonUpDuringDarkH,
             avgMoonIllum: moonIllumWeight ? moonIllumSum / moonIllumWeight : 0,
@@ -1329,17 +1330,18 @@
         const noonStart = new Date(date); noonStart.setHours(12, 0, 0, 0);
         const ns = noonStart.getTime();
 
-        const uniqGrids = [...new Set(STAR_SITES.map(s => s.grid))];
-        const grids = await Promise.all(uniqGrids.map(g => fetchGrid(g).then(d => [g, d.skyCover]).catch(() => [g, []])));
-        const skyMap = Object.fromEntries(grids);
-
-        const evaluated = STAR_SITES.map(s => {
-            const sky = skyMap[s.grid] || [];
-            const r = scoreStargazeNight(sky, s.lat, s.lon, s.bortle, ns);
+        const cloudData = await fetchStarCloudLayers();
+        const evaluated = STAR_SITES.map((s, i) => {
+            const r = scoreStargazeNight(cloudData[i], s.lat, s.lon, s.bortle, ns);
             const cap = maxStargazeScore(s.lat, s.lon, ns);
-            return { ...s, ...r, pct: cap > 0 ? r.score / cap : 0, nightStart: ns };
+            return {
+                ...s, ...r,
+                pct: cap > 0 ? r.score / cap : 0,
+                rankScore: r.score * starDriveFactor(s.driveMin, noonStart),
+                nightStart: ns,
+            };
         });
-        evaluated.sort((a, b) => b.score - a.score);
+        evaluated.sort((a, b) => b.rankScore - a.rankScore);
         return evaluated;
     }
 
@@ -1369,7 +1371,7 @@
                     </div>
                 </div>
                 <div class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                    <div><span class="label">clear-dark</span> <span class="ml-1 font-semibold">${top.clearDarkH.toFixed(1)}h</span></div>
+                    <div><span class="label">quality dark</span> <span class="ml-1 font-semibold">${top.qualityH.toFixed(1)}h</span></div>
                     <div><span class="label">avg cloud</span> <span class="ml-1 font-semibold">${top.avgCloud != null ? Math.round(top.avgCloud) + '%' : '—'}</span></div>
                     <div><span class="label">moon</span> <span class="ml-1 font-semibold">${(() => { const p = phase.toLowerCase(); if (p.includes('waxing') || p.includes('first')) return 'waxing'; if (p.includes('waning') || p.includes('last')) return 'waning'; return p; })()}</span></div>
                     <div><span class="label">moon up</span> <span class="ml-1 font-semibold">${top.moonUpDuringDarkH.toFixed(1)}h</span></div>
@@ -1581,7 +1583,7 @@
                 <div class="flex items-baseline justify-between">
                     <div>
                         <div class="font-semibold">${winner.night} · ${winner.top.name}</div>
-                        <div class="text-xs text-slate-400 mt-0.5">${winner.top.clearDarkH.toFixed(1)}h clear · ${winner.top.avgCloud != null ? Math.round(winner.top.avgCloud) + '% cloud' : 'no forecast'} · 🌙 ${Math.round(illum*100)}%</div>
+                        <div class="text-xs text-slate-400 mt-0.5">${winner.top.qualityH.toFixed(1)}h quality · ${winner.top.avgCloud != null ? Math.round(winner.top.avgCloud) + '% cloud' : 'no forecast'} · 🌙 ${Math.round(illum*100)}%</div>
                     </div>
                     <div class="text-xl font-bold" style="color: hsl(${50 - pct*5}, ${5 + pct*95}%, ${30 + pct*45}%)">${Math.round(pct * 100)}%</div>
                 </div>
