@@ -860,6 +860,9 @@
     const LOTTERY_GAMES = [
         { id: 8, label: 'SuperLotto' },
         { id: 10, label: 'Fantasy 5' },
+        // $2/play at 1-in-292,201,338 jackpot odds: only show when the
+        // jackpot beats the break-even price of a ticket (2 × odds).
+        { id: 12, label: 'Powerball', minJackpot: 2 * 292201338 },
     ];
 
     function fmtJackpot(amt) {
@@ -879,6 +882,7 @@
             const parts = LOTTERY_GAMES.map((g, i) => {
                 const nd = results[i] && results[i].NextDraw;
                 if (!nd || nd.JackpotAmount == null) return null;
+                if (g.minJackpot && nd.JackpotAmount < g.minJackpot) return null;
                 const draw = new Date(nd.DrawDate);
                 const today = new Date();
                 const day = draw.toDateString() === today.toDateString()
