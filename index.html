@@ -760,6 +760,9 @@
             renderSports(now),
             renderTV(now),
             renderLottery(),
+            renderAQI(),
+            inSD ? renderTides(now) : null,
+            renderElection(now),
             inSD ? renderSunset(now) : renderSunsetSimple(now),
             inSD ? renderStargaze(now) : renderStargazeSimple(now),
             // Farmers markets today: skip on Saturday only (weekend prep covers
@@ -904,6 +907,85 @@
         } catch (e) {
             return null;
         }
+    }
+
+    function aqiInfo(aqi) {
+        if (aqi <= 100) return { label: 'Moderate', color: '#fde047' };
+        if (aqi <= 150) return { label: 'Unhealthy for sensitive groups', color: '#fdba74' };
+        if (aqi <= 200) return { label: 'Unhealthy', color: '#f87171' };
+        if (aqi <= 300) return { label: 'Very unhealthy', color: '#c084fc' };
+        return { label: 'Hazardous', color: '#fda4af' };
+    }
+
+    async function renderAQI() {
+        try {
+            const home = LOCATIONS.home;
+            const r = await fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${home.lat}&longitude=${home.lon}&current=us_aqi`);
+            const d = await r.json();
+            const aqi = d.current && d.current.us_aqi;
+            // Quiet when air is Good — only surface when it's worth knowing.
+            if (aqi == null || aqi <= 50) return null;
+            const info = aqiInfo(aqi);
+            return `<section class="card rounded-xl p-3">
+                <div class="flex items-baseline justify-between gap-4 flex-wrap">
+                    <h2 class="text-lg font-semibold">Air quality</h2>
+                    <span class="text-sm"><span class="font-semibold" style="color:${info.color}">AQI ${Math.round(aqi)}</span> <span class="text-slate-400">${info.label}</span></span>
+                </div>
+            </section>`;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // NOAA CO-OPS station 9410230 = La Jolla (Scripps Pier).
+    const TIDE_STATION = '9410230';
+
+    async function renderTides(now) {
+        try {
+            const ymd = pacificISODate(now).replace(/-/g, '');
+            const url = `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=daily-dashboard&begin_date=${ymd}&end_date=${ymd}&datum=MLLW&station=${TIDE_STATION}&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
+            const [tides, solar] = await Promise.all([
+                fetch(url).then(r => r.json()),
+                fetchSolar(now),
+            ]);
+            // Show only on days with a daylight low tide below 0 ft —
+            // that's when the tide pools are actually walkable.
+            const best = (tides.predictions || [])
+                .filter(p => p.type === 'L')
+                .map(p => ({ t: new Date(p.t.replace(' ', 'T')), v: parseFloat(p.v) }))
+                .filter(p => p.v < 0 && p.t >= solar.sunrise && p.t <= solar.sunset)
+                .sort((a, b) => a.v - b.v)[0];
+            if (!best) return null;
+            return `<section class="card rounded-xl p-3">
+                <div class="flex items-baseline justify-between gap-4 flex-wrap">
+                    <h2 class="text-lg font-semibold">Tide pools</h2>
+                    <span class="text-sm"><span class="font-semibold" style="color:#7dd3fc">${best.v.toFixed(1)} ft</span> <span class="text-slate-400">low tide at ${fmtTime(best.t)}</span></span>
+                </div>
+            </section>`;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    const CA_ELECTIONS = [
+        { date: '2026-11-03', label: 'CA general election' },
+    ];
+
+    function renderElection(now) {
+        const next = CA_ELECTIONS
+            .map(e => ({ ...e, d: new Date(e.date + 'T20:00:00') }))
+            .filter(e => e.d >= now)
+            .sort((a, b) => a.d - b.d)[0];
+        if (!next) return null;
+        const days = Math.ceil((next.d - now) / 86400000);
+        if (days > 45) return null;
+        const when = days === 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
+        return `<section class="card rounded-xl p-3">
+            <div class="flex items-baseline justify-between gap-4 flex-wrap">
+                <h2 class="text-lg font-semibold">Election</h2>
+                <span class="text-sm"><span class="font-semibold" style="color:#fca5a5">${next.label} ${when}</span> · <a href="https://samiprehn.github.io/ready-set-vote/" class="text-sky-400 underline">research your ballot</a></span>
+            </div>
+        </section>`;
     }
 
     async function renderSunsetSimple(now) {
