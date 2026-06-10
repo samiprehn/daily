@@ -860,7 +860,8 @@
     }
 
     const LOTTERY_GAMES = [
-        { id: 8, label: 'SuperLotto' },
+        // $1/play at 1-in-41,416,353 odds
+        { id: 8, label: 'SuperLotto', minJackpot: 41416353 },
         // $1/play at 1-in-575,757 odds (C(39,5))
         { id: 10, label: 'Fantasy 5', minJackpot: 575757 },
         // Only show when the jackpot beats the break-even price of a
