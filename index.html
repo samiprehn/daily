@@ -495,7 +495,7 @@
     // ── NDBC water temp (mirrors sd_dog_beaches) ──────────────────────
     async function fetchWaterTemp(buoyId) {
         try {
-            const r = await fetch(`https://corsproxy.io/?https://www.ndbc.noaa.gov/data/realtime2/${buoyId}.txt`);
+            const r = await fetch(`https://noaa-buoy.sami-prehn.workers.dev/?id=${buoyId}`);
             if (!r.ok) return null;
             const text = await r.text();
             const lines = text.trim().split('\n');
