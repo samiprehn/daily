@@ -1125,6 +1125,28 @@
         { sport: 'soccer',     league: 'usa.1' }, // MLS
     ];
 
+    // MLB Gameday links need MLB's own gamePk, which ESPN doesn't expose, so
+    // fetch the day's schedule from MLB's free StatsAPI and match by team name.
+    let _mlbSchedPromise = null, _mlbSchedDate = null;
+    async function mlbGamePk(dateStr, teamA, teamB) {
+        const iso = `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
+        if (_mlbSchedDate !== iso) {
+            _mlbSchedDate = iso;
+            _mlbSchedPromise = fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${iso}`)
+                .then(r => r.ok ? r.json() : null).catch(() => null);
+        }
+        const data = await _mlbSchedPromise;
+        const games = data?.dates?.[0]?.games || [];
+        const a = teamA.toLowerCase(), b = teamB.toLowerCase();
+        const hit = games.find(g => {
+            const home = (g.teams?.home?.team?.name || '').toLowerCase();
+            const away = (g.teams?.away?.team?.name || '').toLowerCase();
+            const nameMatch = (full, q) => full.includes(q) || q.includes(full);
+            return (nameMatch(home, a) && nameMatch(away, b)) || (nameMatch(home, b) && nameMatch(away, a));
+        });
+        return hit?.gamePk || null;
+    }
+
     function teamMatches(competitorTeam, userName) {
         if (!competitorTeam) return false;
         const lower = userName.toLowerCase();
@@ -1171,7 +1193,15 @@
                             const result = myScore > oppScore ? 'beat' : myScore < oppScore ? 'lost to' : 'tied';
                             summary = `${result} ${oppLabel} <span class="font-semibold">${myScore}–${oppScore}</span>`;
                         }
-                        lines.push(`<li><span class="font-semibold">${myLabel}</span> <span class="text-slate-300">${summary}</span></li>`);
+                        // Default: Google search for the matchup. Live MLB games link to MLB Gameday play-by-play.
+                        const teamFull = me.team.displayName || myLabel;
+                        const oppFull = opp.team.displayName || oppLabel;
+                        let href = `https://www.google.com/search?q=${encodeURIComponent(`${teamFull} vs ${oppFull}`)}`;
+                        if (lg.league === 'mlb' && stateName === 'in') {
+                            const pk = await mlbGamePk(dateStr, teamFull, oppFull);
+                            if (pk) href = `https://www.mlb.com/gameday/${pk}/live`;
+                        }
+                        lines.push(`<li><a href="${href}" target="_blank" rel="noopener" class="hover:text-sky-300"><span class="font-semibold">${myLabel}</span> <span class="text-slate-300">${summary}</span></a></li>`);
                     }
                 }
             } catch (e) { /* skip league on error */ }
