@@ -105,6 +105,11 @@
     let LOCATIONS = loadLocations();
     const PI = Math.PI, RAD = PI / 180, OBLIQUITY = RAD * 23.4397;
 
+    // Escape a string for safe interpolation into HTML (including attribute values).
+    function esc(s) {
+        return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
     // ── Spots: sunset (mirrors sd_sunset) ─────────────────────────────
     const SPOTS = [
         { name: 'Sunset Cliffs',           lat: 32.7157, lon: -117.2542 },
@@ -292,7 +297,7 @@
             const pts = [...SPOTS, OFFSHORE];
             const lats = pts.map(p => p.lat).join(',');
             const lons = pts.map(p => p.lon).join(',');
-            _cloudLayersPromise = fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code&forecast_days=7&timezone=America%2FLos_Angeles`)
+            _cloudLayersPromise = fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code&forecast_days=7&timezone=auto`)
                 .then(r => { if (!r.ok) throw new Error(`Open-Meteo: ${r.status}`); return r.json(); });
         }
         return _cloudLayersPromise;
@@ -326,7 +331,7 @@
             const lats = STAR_SITES.map(s => s.lat).join(',');
             const lons = STAR_SITES.map(s => s.lon).join(',');
             // weather_code included only because the shared cloudsAt() reads it.
-            _starCloudPromise = fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code&forecast_days=7&timezone=America%2FLos_Angeles`)
+            _starCloudPromise = fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code&forecast_days=7&timezone=auto`)
                 .then(r => { if (!r.ok) throw new Error(`Open-Meteo: ${r.status}`); return r.json(); });
         }
         return _starCloudPromise;
@@ -416,29 +421,29 @@
         const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
             + `&hourly=temperature_2m,apparent_temperature,weather_code,relative_humidity_2m,wind_speed_10m,wind_direction_10m,uv_index`
             + `&daily=temperature_2m_min,temperature_2m_max,weather_code,wind_speed_10m_max`
-            + `&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America%2FLos_Angeles&forecast_days=8`;
+            + `&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=8`;
         const r = await fetch(url);
         if (!r.ok) throw new Error(`Open-Meteo ${lat},${lon}: ${r.status}`);
         const data = await r.json();
         meteoCache[key] = data;
         return data;
     }
-    function indexAt(hourly, date, hour) {
-        const y = date.getFullYear();
-        const mo = String(date.getMonth() + 1).padStart(2, '0');
-        const d = String(date.getDate()).padStart(2, '0');
-        const h = String(hour).padStart(2, '0');
-        return hourly.time.indexOf(`${y}-${mo}-${d}T${h}:00`);
+    // With timezone=auto, hourly/daily time strings are local to the forecast
+    // location; format the target date in that same timezone before matching.
+    function meteoISODate(meteo, date) {
+        return date.toLocaleDateString('en-CA', { timeZone: meteo.timezone });
     }
-    function dailyIndex(daily, date) {
-        const y = date.getFullYear();
-        const mo = String(date.getMonth() + 1).padStart(2, '0');
-        const d = String(date.getDate()).padStart(2, '0');
-        return daily.time.indexOf(`${y}-${mo}-${d}`);
+    function indexAt(meteo, date, hour) {
+        const h = String(hour).padStart(2, '0');
+        return meteo.hourly.time.indexOf(`${meteoISODate(meteo, date)}T${h}:00`);
+    }
+    function dailyIndex(meteo, date) {
+        return meteo.daily.time.indexOf(meteoISODate(meteo, date));
     }
     // Index of the hour that produced the daily high (for "feels like at peak").
-    function peakHourIndex(hourly, date) {
-        const dateStr = pacificISODate(date);
+    function peakHourIndex(meteo, date) {
+        const hourly = meteo.hourly;
+        const dateStr = meteoISODate(meteo, date);
         let peakIdx = -1, peakTemp = -Infinity;
         for (let i = 0; i < hourly.time.length; i++) {
             if (!hourly.time[i].startsWith(dateStr)) continue;
@@ -624,7 +629,7 @@
                 <div class="space-y-3">
                     <label class="block">
                         <span class="text-xs text-slate-400">Street</span>
-                        <input name="${kind}_street" type="text" ${req} value="${street}"
+                        <input name="${kind}_street" type="text" ${req} value="${esc(street)}"
                             autocomplete="section-${kind} address-line1"
                             class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400"
                             placeholder="123 Main St">
@@ -632,20 +637,20 @@
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <label class="block">
                             <span class="text-xs text-slate-400">City</span>
-                            <input name="${kind}_city" type="text" ${req} value="${city}"
+                            <input name="${kind}_city" type="text" ${req} value="${esc(city)}"
                                 autocomplete="section-${kind} address-level2"
                                 class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
                         </label>
                         <label class="block">
                             <span class="text-xs text-slate-400">State</span>
-                            <input name="${kind}_state" type="text" ${req} maxlength="2" value="${state}"
+                            <input name="${kind}_state" type="text" ${req} maxlength="2" value="${esc(state)}"
                                 autocomplete="section-${kind} address-level1"
                                 class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400 uppercase"
                                 placeholder="CA">
                         </label>
                         <label class="block">
                             <span class="text-xs text-slate-400">ZIP</span>
-                            <input name="${kind}_zip" type="text" ${req} inputmode="numeric" value="${zip}"
+                            <input name="${kind}_zip" type="text" ${req} inputmode="numeric" value="${esc(zip)}"
                                 autocomplete="section-${kind} postal-code"
                                 class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
                         </label>
@@ -743,7 +748,7 @@
                 LOCATIONS = loadLocations();
                 run();
             } catch (err) {
-                renderSetup(`Couldn't find one of those addresses: ${err.message}`, ex);
+                renderSetup(`Couldn't find one of those addresses: ${esc(err.message)}`, ex);
             }
         });
     }
@@ -822,7 +827,7 @@
 
             const cards = slots.map(s => {
                 const meteo = meteoCache[`${s.loc.lat},${s.loc.lon}`];
-                const idx = indexAt(meteo.hourly, now, s.hour);
+                const idx = indexAt(meteo, now, s.hour);
                 if (idx === -1) {
                     return `<div class="rounded-xl p-3 bg-slate-700/40">
                         <div class="label">${s.label} · ${s.loc.label}</div>
@@ -855,7 +860,7 @@
 
             // Tonight's low @ home
             const meteoHome = meteoCache[`${HOME.lat},${HOME.lon}`];
-            const todayIdx = dailyIndex(meteoHome.daily, now);
+            const todayIdx = dailyIndex(meteoHome, now);
             const lowTonight = todayIdx >= 0 ? Math.round(meteoHome.daily.temperature_2m_min[todayIdx + 1] ?? meteoHome.daily.temperature_2m_min[todayIdx]) : null;
 
             return `<section class="card rounded-xl p-4">
@@ -866,7 +871,7 @@
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">${cards}</div>
             </section>`;
         } catch (e) {
-            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Weather</h2><p class="text-slate-400 text-sm mt-2">Couldn't load: ${e.message}</p></section>`;
+            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Weather</h2><p class="text-slate-400 text-sm mt-2">Couldn't load: ${esc(e.message)}</p></section>`;
         }
     }
 
@@ -880,7 +885,7 @@
                 </div>
             </section>`;
         } catch (e) {
-            return `<section class="card rounded-xl p-3"><h2 class="text-lg font-semibold">Sunrise</h2><span class="text-sm text-slate-400">${e.message}</span></section>`;
+            return `<section class="card rounded-xl p-3"><h2 class="text-lg font-semibold">Sunrise</h2><span class="text-sm text-slate-400">${esc(e.message)}</span></section>`;
         }
     }
 
@@ -1028,7 +1033,7 @@
                 </div>
             </section>`;
         } catch (e) {
-            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Sunset</h2><p class="text-slate-400 text-sm">${e.message}</p></section>`;
+            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Sunset</h2><p class="text-slate-400 text-sm">${esc(e.message)}</p></section>`;
         }
     }
 
@@ -1196,13 +1201,13 @@
                         const oppLabel = opp.team.shortDisplayName || opp.team.abbreviation || 'Opp';
                         let summary;
                         if (stateName === 'pre') {
-                            summary = `${isHome ? 'vs' : '@'} ${oppLabel} · <span class="font-semibold">${fmtTime(start)}</span>`;
+                            summary = `${isHome ? 'vs' : '@'} ${esc(oppLabel)} · <span class="font-semibold">${fmtTime(start)}</span>`;
                         } else if (stateName === 'in') {
                             const detail = comp.status?.type?.shortDetail || 'live';
-                            summary = `${isHome ? 'vs' : '@'} ${oppLabel} · <span class="text-amber-300">${detail}</span> · <span class="font-semibold">${myScore}–${oppScore}</span>`;
+                            summary = `${isHome ? 'vs' : '@'} ${esc(oppLabel)} · <span class="text-amber-300">${detail}</span> · <span class="font-semibold">${myScore}–${oppScore}</span>`;
                         } else {
                             const result = myScore > oppScore ? 'beat' : myScore < oppScore ? 'lost to' : 'tied';
-                            summary = `${result} ${oppLabel} <span class="font-semibold">${myScore}–${oppScore}</span>`;
+                            summary = `${result} ${esc(oppLabel)} <span class="font-semibold">${myScore}–${oppScore}</span>`;
                         }
                         // Default: Google search for the matchup. Live MLB games link to MLB Gameday play-by-play.
                         const teamFull = me.team.displayName || myLabel;
@@ -1212,7 +1217,7 @@
                             const pk = await mlbGamePk(dateStr, teamFull, oppFull);
                             if (pk) href = `https://www.mlb.com/gameday/${pk}/live`;
                         }
-                        lines.push(`<li><a href="${href}" target="_blank" rel="noopener" class="hover:text-sky-300"><span class="font-semibold">${myLabel}</span> <span class="text-slate-300">${summary}</span></a></li>`);
+                        lines.push(`<li><a href="${href}" target="_blank" rel="noopener" class="hover:text-sky-300"><span class="font-semibold">${esc(myLabel)}</span> <span class="text-slate-300">${summary}</span></a></li>`);
                     }
                 }
             } catch (e) { /* skip league on error */ }
@@ -1275,14 +1280,14 @@
                     if (show.type === 'broadcast') {
                         if (ep.airdate !== todayStr) continue;
                         const time = ep.airtime ? fmt12FromHHMM(ep.airtime) : '';
-                        lines.push({ when: 0, html: `<li><span class="font-semibold">${show.name}</span>${time ? ` <span class="text-slate-400">— ${time}</span>` : ''}${tag ? `<span class="text-amber-300">${tag}</span>` : ''}</li>` });
+                        lines.push({ when: 0, html: `<li><span class="font-semibold">${esc(show.name)}</span>${time ? ` <span class="text-slate-400">— ${time}</span>` : ''}${tag ? `<span class="text-amber-300">${tag}</span>` : ''}</li>` });
                     } else {
                         if (ep.airdate < todayStr || ep.airdate > horizonStr) continue;
                         const days = Math.round((new Date(ep.airdate + 'T12:00:00').getTime() - new Date(todayStr + 'T12:00:00').getTime()) / 86400000);
                         const dayLabel = days === 0
                             ? 'today'
                             : new Date(ep.airdate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' });
-                        lines.push({ when: days, html: `<li><span class="font-semibold">${show.name}</span> <span class="text-slate-400">S${ep.season}E${ep.number}</span> <span class="text-slate-400">— ${dayLabel}</span>${tag ? `<span class="text-amber-300">${tag}</span>` : ''}</li>` });
+                        lines.push({ when: days, html: `<li><span class="font-semibold">${esc(show.name)}</span> <span class="text-slate-400">S${ep.season}E${ep.number}</span> <span class="text-slate-400">— ${dayLabel}</span>${tag ? `<span class="text-amber-300">${tag}</span>` : ''}</li>` });
                     }
                 }
             } catch (e) { /* skip show on error */ }
@@ -1329,7 +1334,7 @@
             return `<section class="card rounded-xl p-4">
                 <div class="flex items-baseline justify-between">
                     <h2 class="text-lg font-semibold">🚗 ${directionLabel}</h2>
-                    <span class="text-sm text-slate-400">${e.message}</span>
+                    <span class="text-sm text-slate-400">${esc(e.message)}</span>
                 </div>
             </section>`;
         }
@@ -1365,7 +1370,7 @@
                 ` : `<div class="text-slate-400 text-sm">No forecast available.</div>`}
             </section>`;
         } catch (e) {
-            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Sunset</h2><p class="text-slate-400 text-sm mt-2">Couldn't load: ${e.message}</p></section>`;
+            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Sunset</h2><p class="text-slate-400 text-sm mt-2">Couldn't load: ${esc(e.message)}</p></section>`;
         }
     }
 
@@ -1423,7 +1428,7 @@
                 ${coreUp ? `<div class="text-xs mt-2" style="color:#c4b5fd">✨ Galactic core above 20° during the dark window</div>` : ''}
             </section>`;
         } catch (e) {
-            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Stargazing tonight</h2><p class="text-slate-400 text-sm mt-2">Couldn't load: ${e.message}</p></section>`;
+            return `<section class="card rounded-xl p-4"><h2 class="text-lg font-semibold">Stargazing tonight</h2><p class="text-slate-400 text-sm mt-2">Couldn't load: ${esc(e.message)}</p></section>`;
         }
     }
 
@@ -1434,7 +1439,7 @@
         const oh = getOpenHours(m, date);
         if (!meteo || !oh) return null;
         const midHour = Math.round((oh.open + oh.close) / 2);
-        const idx = indexAt(meteo.hourly, date, midHour);
+        const idx = indexAt(meteo, date, midHour);
         if (idx < 0) return null;
         const uv = Math.round(meteo.hourly.uv_index[idx]);
         return {
@@ -1450,10 +1455,10 @@
     function beachWeatherCells(b, date) {
         const meteo = meteoCache[`${b.lat},${b.lon}`];
         if (!meteo) return null;
-        const dIdx = dailyIndex(meteo.daily, date);
+        const dIdx = dailyIndex(meteo, date);
         if (dIdx < 0) return null;
-        const noonIdx = indexAt(meteo.hourly, date, 12);
-        const peakIdx = peakHourIndex(meteo.hourly, date);
+        const noonIdx = indexAt(meteo, date, 12);
+        const peakIdx = peakHourIndex(meteo, date);
         const high = Math.round(meteo.daily.temperature_2m_max[dIdx]);
         const feel = peakIdx >= 0 ? Math.round(meteo.hourly.apparent_temperature[peakIdx]) : null;
         // Use the noon hour's weather_code rather than the daily aggregate (matches sd_dog_beaches).
@@ -1606,7 +1611,7 @@
                 </div>`;
             }
         } catch (e) {
-            sunsetBlock = `<div class="text-slate-400 text-sm mb-3">Sunset forecast unavailable: ${e.message}</div>`;
+            sunsetBlock = `<div class="text-slate-400 text-sm mb-3">Sunset forecast unavailable: ${esc(e.message)}</div>`;
         }
 
         // Best stargazing: Sat vs Sun, top site of each
@@ -1633,7 +1638,7 @@
                 </div>
             </div>`;
         } catch (e) {
-            starBlock = `<div class="text-slate-400 text-sm">Stargazing forecast unavailable: ${e.message}</div>`;
+            starBlock = `<div class="text-slate-400 text-sm">Stargazing forecast unavailable: ${esc(e.message)}</div>`;
         }
 
         return `<section class="card rounded-xl p-4">
@@ -1681,7 +1686,7 @@
     });
 
     run().catch(err => {
-        document.getElementById('content').innerHTML = `<div class="card rounded-xl p-4"><p class="text-red-400">Couldn't load dashboard: ${err.message}</p></div>`;
+        document.getElementById('content').innerHTML = `<div class="card rounded-xl p-4"><p class="text-red-400">Couldn't load dashboard: ${esc(err.message)}</p></div>`;
     });
     </script>
 </body>
