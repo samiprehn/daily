@@ -782,6 +782,7 @@
             inSD && dow !== 6 ? renderFarmers(now) : null,
             inSD && showWeekendPrep ? renderWeekendPrep() :
                 (inSD && dow === 0 ? renderDogBeachesToday(now) : null),
+            renderOptimism(),
         ];
         const sections = (await Promise.all(jobs)).filter(Boolean);
 
@@ -789,6 +790,16 @@
         // SVGs only exist after innerHTML is set; populate them now.
         updateSunIcon();
         updateMoonIcon();
+    }
+
+    function renderOptimism() {
+        return `<section class="card rounded-xl p-4">
+            <h2 class="text-lg font-semibold">Habits to improve pessimism to optimism</h2>
+            <ul class="mt-2 space-y-2 text-sm text-slate-300 list-disc list-inside">
+                <li>What are 3 things you're grateful for from the last 24 hours?</li>
+                <li>Send a text or email thanking someone for something specific.</li>
+            </ul>
+        </section>`;
     }
 
     async function renderWeather(now, isWeekend) {
