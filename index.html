@@ -663,21 +663,13 @@
         const scheduleGroup = `
             <fieldset class="rounded-lg border border-slate-700 p-4">
                 <legend class="px-2 text-xs uppercase tracking-wide text-slate-400">Pickup schedule (optional)</legend>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <label class="block">
-                        <span class="text-xs text-slate-400">Trash day (weekly)</span>
-                        <select name="trash_day" class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
-                            <option value="">—</option>
-                            ${dayOpts}
-                        </select>
-                    </label>
-                    <label class="block">
-                        <span class="text-xs text-slate-400">Next recycling pickup</span>
-                        <input name="recycling_next" type="date" value="${sched.recyclingNext || ''}"
-                            class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
-                    </label>
-                </div>
-                <p class="text-xs text-slate-500 mt-2">Recycling cycles biweekly; enter any past or upcoming pickup date and the dashboard will compute the next one.</p>
+                <label class="block">
+                    <span class="text-xs text-slate-400">Trash &amp; recycling day (weekly)</span>
+                    <select name="trash_day" class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-100 focus:outline-none focus:border-indigo-400">
+                        <option value="">—</option>
+                        ${dayOpts}
+                    </select>
+                </label>
             </fieldset>`;
         const showsGroup = `
             <fieldset class="rounded-lg border border-slate-700 p-4">
@@ -726,7 +718,6 @@
                     hasWork ? geocodeAddress(workAddr) : null,
                 ]);
                 const trashDay = f.trash_day.value;
-                const recyclingNext = f.recycling_next.value;
                 const showsRaw = (f.shows ? f.shows.value.trim() : '');
                 const showNames = showsRaw ? showsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
                 const shows = (await Promise.all(
@@ -740,7 +731,6 @@
                     work: hasWork ? { ...work, ...workParts, label: 'Work' } : null,
                     schedule: {
                         trashDay: trashDay === '' ? null : Number(trashDay),
-                        recyclingNext: recyclingNext || null,
                     },
                     shows,
                     teams,
@@ -1087,42 +1077,14 @@
         if (diff < 0) diff += 7;
         return diff;
     }
-    function daysUntilRecycling(nextDateStr) {
-        if (!nextDateStr) return null;
-        const today = new Date(); today.setHours(0, 0, 0, 0);
-        const target = new Date(nextDateStr + 'T00:00:00');
-        // Cycle biweekly until we land on or after today
-        while (target.getTime() < today.getTime()) target.setDate(target.getDate() + 14);
-        return Math.round((target - today) / 86400000);
-    }
-    function whenLabel(days) {
-        if (days === 0) return 'today';
-        if (days === 1) return 'tomorrow';
-        // Calendar-week boundary (US convention: week is Sunday–Saturday).
-        const todayDow = new Date().getDay(); // 0=Sun ... 6=Sat
-        const daysUntilSaturday = 6 - todayDow;
-        if (days <= daysUntilSaturday) return 'this week';
-        if (days <= daysUntilSaturday + 7) return 'next week';
-        return null;
-    }
-
     async function renderTrash() {
         const sched = LOCATIONS.schedule || {};
-        const tDays = sched.trashDay != null ? daysUntilDayOfWeek(sched.trashDay) : null;
-        const rDays = sched.recyclingNext ? daysUntilRecycling(sched.recyclingNext) : null;
-        // Show the card only when at least one of them is today or tomorrow.
-        // When the card shows, include the other one with broader wording
-        // (this week / next week) if applicable.
-        const eitherClose = (tDays != null && tDays <= 1) || (rDays != null && rDays <= 1);
-        if (!eitherClose) return '';
-        const tLabel = tDays != null ? whenLabel(tDays) : null;
-        const rLabel = rDays != null ? whenLabel(rDays) : null;
-        const parts = [];
-        if (tLabel) parts.push(`<div><span class="text-lg mr-1">🗑️</span><span class="font-semibold">Trash</span> <span class="text-slate-300">${tLabel}</span></div>`);
-        if (rLabel) parts.push(`<div><span class="text-lg mr-1">♻️</span><span class="font-semibold">Recycling</span> <span class="text-slate-300">${rLabel}</span></div>`);
-        if (!parts.length) return '';
+        if (sched.trashDay == null) return '';
+        // Show the card only on pickup day or the day before.
+        const days = daysUntilDayOfWeek(sched.trashDay);
+        if (days > 1) return '';
         return `<section class="card rounded-xl p-3">
-            <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">${parts.join('')}</div>
+            <div class="text-sm"><span class="text-lg mr-1">🗑️♻️</span><span class="font-semibold">Trash &amp; recycling</span> <span class="text-slate-300">${days === 0 ? 'today' : 'tomorrow'}</span></div>
         </section>`;
     }
 
