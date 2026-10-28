@@ -815,7 +815,7 @@
                 const idx = indexAt(meteo, now, s.hour);
                 if (idx === -1) {
                     return `<div class="rounded-xl p-3 bg-slate-700/40">
-                        <div class="label">${s.label} · ${s.loc.label}</div>
+                        <div class="label">${s.label ? `${s.label} · ` : ''}${s.loc.label}</div>
                         <div class="text-slate-400 text-sm mt-1">No data</div>
                     </div>`;
                 }
@@ -830,7 +830,7 @@
                 const uvL = s.uv ? uvLabel(uv) : null;
                 return `<div class="rounded-xl p-3 bg-slate-700/40">
                     <div class="flex items-baseline justify-between">
-                        <div class="label">${s.label} · ${s.loc.label}</div>
+                        <div class="label">${s.label ? `${s.label} · ` : ''}${s.loc.label}</div>
                         <div class="text-2xl">${weatherEmoji(code)}</div>
                     </div>
                     <div class="flex items-baseline justify-between flex-wrap gap-x-3 gap-y-1 mt-0.5">
@@ -839,11 +839,13 @@
                             <span>💨 ${wSpeed} ${wDir}</span>
                         </div>
                     </div>
-                    ${s.uv && uv != null ? `<div class="text-xs mt-1" style="color:${uvL.color}">☀ UV ${uv} ${uvL.label}</div>` : ''}
+                    ${s.uv && uv != null ? `<div class="text-xs mt-1" style="color:${uvL.color}">☀ UV ${uv}${s.split ? '' : ` ${uvL.label}`}</div>` : ''}
                 </div>`;
             };
             const cards = slots.map(s => {
-                const parts = s.locs.map(loc => card({ ...s, loc }));
+                // Split boxes: time label on the first only, and no UV word (too narrow).
+                const split = s.locs.length > 1;
+                const parts = s.locs.map((loc, i) => card({ ...s, loc, split, label: i === 0 ? s.label : null }));
                 return parts.length > 1 ? `<div class="grid grid-cols-2 gap-2">${parts.join('')}</div>` : parts[0];
             }).join('');
 
