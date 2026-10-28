@@ -828,18 +828,20 @@
                 const wDir = windDir(h.wind_direction_10m[idx]);
                 const uv = s.uv ? Math.round(h.uv_index[idx]) : null;
                 const uvL = s.uv ? uvLabel(uv) : null;
-                return `<div class="rounded-xl p-3 bg-slate-700/40">
+                return `<div class="rounded-xl ${s.split ? 'py-3 px-2.5' : 'p-3'} bg-slate-700/40">
                     <div class="flex items-baseline justify-between">
                         <div class="label">${s.label ? `${s.label} · ` : ''}${s.loc.label}</div>
                         <div class="text-2xl">${weatherEmoji(code)}</div>
                     </div>
                     <div class="flex items-baseline justify-between flex-wrap gap-x-3 gap-y-1 mt-0.5">
                         <div class="text-2xl font-bold">${temp}°<span class="text-sm text-slate-400 font-normal ml-1 inline-block whitespace-nowrap">feels ${feel}°</span></div>
-                        <div class="text-xs text-slate-300 whitespace-nowrap">
+                        ${s.split ? '' : `<div class="text-xs text-slate-300 whitespace-nowrap">
                             <span>💨 ${wSpeed} ${wDir}</span>
-                        </div>
+                        </div>`}
                     </div>
-                    ${s.uv && uv != null ? `<div class="text-xs mt-1" style="color:${uvL.color}">☀ UV ${uv}${s.split ? '' : ` ${uvL.label}`}</div>` : ''}
+                    ${s.split
+                        ? `<div class="text-xs mt-1 flex flex-wrap gap-x-1.5 whitespace-nowrap"><span class="text-slate-300">💨 ${wSpeed} ${wDir}</span>${uv != null ? `<span style="color:${uvL.color}">☀ UV ${uv}</span>` : ''}</div>`
+                        : s.uv && uv != null ? `<div class="text-xs mt-1" style="color:${uvL.color}">☀ UV ${uv} ${uvL.label}</div>` : ''}
                 </div>`;
             };
             const cards = slots.map(s => {
