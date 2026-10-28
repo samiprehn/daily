@@ -840,7 +840,7 @@
                         </div>`}
                     </div>
                     ${s.split
-                        ? `<div class="text-xs mt-1 flex flex-wrap gap-x-1.5 whitespace-nowrap"><span class="text-slate-300">💨 ${wSpeed} ${wDir}</span>${uv != null ? `<span style="color:${uvL.color}">☀ UV ${uv}</span>` : ''}</div>`
+                        ? `<div class="text-xs mt-1 flex flex-wrap justify-between gap-x-1.5 whitespace-nowrap"><span class="text-slate-300">💨 ${wSpeed} ${wDir}</span>${uv != null ? `<span style="color:${uvL.color}">☀ UV ${uv}</span>` : ''}</div>`
                         : s.uv && uv != null ? `<div class="text-xs mt-1" style="color:${uvL.color}">☀ UV ${uv} ${uvL.label}</div>` : ''}
                 </div>`;
             };
