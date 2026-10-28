@@ -798,24 +798,19 @@
     }
 
     async function renderWeather(now, isWeekend) {
-        const HOME = LOCATIONS.home, WORK = LOCATIONS.work || LOCATIONS.home;
-        const slots = isWeekend
-            ? [
-                { hour: 8,  loc: HOME, label: '8am' },
-                { hour: 12, loc: HOME, label: 'Noon', uv: true },
-                { hour: 17, loc: HOME, label: '5pm' },
-              ]
-            : [
-                { hour: 8,  loc: HOME, label: '8am' },
-                { hour: 12, loc: WORK, label: 'Noon', uv: true },
-                { hour: 17, loc: HOME, label: '5pm' },
-              ];
+        const HOME = LOCATIONS.home, WORK = LOCATIONS.work;
+        // Weekday noon shows work and home side by side.
+        const slots = [
+            { hour: 8,  locs: [HOME], label: '8am' },
+            { hour: 12, locs: !isWeekend && WORK ? [WORK, HOME] : [HOME], label: 'Noon', uv: true },
+            { hour: 17, locs: [HOME], label: '5pm' },
+        ];
 
         try {
-            const uniqLocs = [...new Map(slots.map(s => [`${s.loc.lat},${s.loc.lon}`, s.loc])).values()];
+            const uniqLocs = [...new Map(slots.flatMap(s => s.locs).map(l => [`${l.lat},${l.lon}`, l])).values()];
             await Promise.all(uniqLocs.map(l => fetchMeteo(l.lat, l.lon)));
 
-            const cards = slots.map(s => {
+            const card = s => {
                 const meteo = meteoCache[`${s.loc.lat},${s.loc.lon}`];
                 const idx = indexAt(meteo, now, s.hour);
                 if (idx === -1) {
@@ -839,13 +834,17 @@
                         <div class="text-2xl">${weatherEmoji(code)}</div>
                     </div>
                     <div class="flex items-baseline justify-between flex-wrap gap-x-3 gap-y-1 mt-0.5">
-                        <div class="text-2xl font-bold whitespace-nowrap">${temp}°<span class="text-sm text-slate-400 font-normal ml-1">feels ${feel}°</span></div>
+                        <div class="text-2xl font-bold">${temp}°<span class="text-sm text-slate-400 font-normal ml-1 inline-block whitespace-nowrap">feels ${feel}°</span></div>
                         <div class="text-xs text-slate-300 whitespace-nowrap">
                             <span>💨 ${wSpeed} ${wDir}</span>
                         </div>
                     </div>
                     ${s.uv && uv != null ? `<div class="text-xs mt-1" style="color:${uvL.color}">☀ UV ${uv} ${uvL.label}</div>` : ''}
                 </div>`;
+            };
+            const cards = slots.map(s => {
+                const parts = s.locs.map(loc => card({ ...s, loc }));
+                return parts.length > 1 ? `<div class="grid grid-cols-2 gap-2">${parts.join('')}</div>` : parts[0];
             }).join('');
 
             // Tonight's low @ home
