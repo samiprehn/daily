@@ -125,9 +125,14 @@
     ];
 
     // Light path: points out along the sunset azimuth (mirrors sd_sunset).
-    // A cloud deck out there blocks sunlight before it reaches the canvas.
-    const PATH_KM = [50, 150, 300];
-    const PATH_WEIGHTS = [0.4, 0.35, 0.25];
+    // A solid deck out there blocks sunlight before it reaches the canvas;
+    // patchy low clouds within ~100 km sit on the horizon and light up.
+    const PATH_KM      = [25,   50,   100, 150,  200,  300];
+    const PATH_WEIGHTS = [0.15, 0.25, 0.2, 0.15, 0.15, 0.1];
+    const HORIZON_KM   = { 50: 0.4, 100: 0.3 }; // visible-horizon weights (local low gets 0.3)
+    const deck = (cover, threshold) => Math.min(1, Math.max(0, (cover - threshold) / (100 - threshold)));
+    const patchy = (low) => low <= 50 ? low : Math.max(0, 100 - low);
+    const pathOpacity = (c) => Math.max(100 * deck(c.low, 60), 80 * deck(c.mid, 60), 0.3 * c.high);
 
     // ── Sites: stargazing (mirrors stargaze) ──────────────────────────
     const STAR_SITES = [
@@ -257,17 +262,18 @@
     // ── NWS gridpoint helpers ─────────────────────────────────────────
     // ── Sunset scoring (mirrors sd_sunset) ────────────────────────────
     // score (0-100) = canvas × light:
-    //   canvas — high + mid clouds overhead that catch post-sunset color
-    //            (combined as overlapping layers). Best near 55% cover; clear
-    //            sky is a bland C, full thin cirrus a B. Thick mid decks
-    //            (altostratus) are gray rather than colorful, so they're cut.
-    //   light  — fraction of sunlight that reaches the canvas: cut by local low
-    //            clouds hiding the horizon and by cloud out along the light path.
+    //   canvas — clouds that catch post-sunset color: high + mid overhead plus
+    //            patchy low clouds on the visible horizon (combined as
+    //            overlapping layers). Best near 55% cover; clear sky is a C.
+    //            Thick mid decks (altostratus) are gray, so they're cut.
+    //   light  — fraction of sunlight that reaches the canvas: cut by a solid
+    //            local marine layer and by decks out along the light path.
     function scoreSunset(c) {
-        const canvas = 100 - (100 - c.high) * (100 - c.mid) / 100;
+        const horizonLow = 0.3 * patchy(c.low) + c.pathPatchy;
+        const canvas = 100 - (100 - c.high) * (100 - c.mid) * (100 - horizonLow) / 1e4;
         let canvasScore = 40 + 60 * Math.exp(-((canvas - 55) ** 2) / 1600);
         if (c.mid > 60) canvasScore *= 1 - 0.5 * (c.mid - 60) / 40;
-        const light = (1 - 0.9 * c.low / 100) * (1 - 0.85 * c.pathBlock / 100);
+        const light = (1 - 0.95 * deck(c.low, 50)) * (1 - 0.85 * c.pathBlock / 100);
         let score = Math.round(canvasScore * light);
         if (c.rain) score = Math.min(score, 20);
         if (c.fog)  score = Math.min(score, 15);
@@ -275,11 +281,11 @@
         let label;
         if (c.fog)                  label = 'Fog';
         else if (c.rain)            label = 'Rain';
-        else if (c.low >= 60)       label = 'Marine layer';
+        else if (c.low >= 75)       label = 'Marine layer';
         else if (c.pathBlock >= 50) label = 'Horizon blocked';
-        else if (c.low >= 30)       label = 'Patchy low clouds';
         else if (c.mid > 70)        label = 'Thick cloud deck';
-        else if (canvas >= 80)      label = 'Overcast high clouds';
+        else if (canvas >= 80)      label = 'Overcast';
+        else if (horizonLow >= 15)  label = 'Patchy low clouds to light up';
         else if (canvas >= 15)      label = 'Clouds to catch color';
         else                        label = 'Clear & golden';
         return { score, label };
@@ -1080,16 +1086,19 @@
 
     async function evaluateSunset(date) {
         const [sunset, cloudData] = await Promise.all([fetchSunset(date), fetchCloudLayers()]);
-        let pathBlock = 0;
+        let pathBlock = 0, pathPatchy = 0;
         cloudData.slice(SPOTS.length).forEach((r, k) => {
             const c = cloudsAt(r, sunset);
-            if (c) pathBlock += PATH_WEIGHTS[k] * Math.max(c.low, 0.7 * c.mid, 0.3 * c.high);
+            if (!c) return;
+            pathBlock += PATH_WEIGHTS[k] * pathOpacity(c);
+            pathPatchy += (HORIZON_KM[PATH_KM[k]] || 0) * patchy(c.low);
         });
         pathBlock = Math.round(pathBlock);
         const evaluated = SPOTS.map((s, i) => {
             const c = cloudsAt(cloudData[i], sunset);
             if (!c) return null;
             c.pathBlock = pathBlock;
+            c.pathPatchy = pathPatchy;
             const { score, label } = scoreSunset(c);
             return { ...s, clouds: c, score, label, grade: gradeFromScore(score) };
         }).filter(Boolean);
