@@ -124,9 +124,10 @@
         { name: 'Del Mar',                 lat: 32.9700, lon: -117.2650 },
     ];
 
-    // Sample point ~80 km west of San Diego. Low clouds out there block the
-    // sunlight path under a local cloud deck even when the coast is clear.
-    const OFFSHORE = { lat: 32.85, lon: -118.10 };
+    // Light path: points out along the sunset azimuth (mirrors sd_sunset).
+    // A cloud deck out there blocks sunlight before it reaches the canvas.
+    const PATH_KM = [50, 150, 300];
+    const PATH_WEIGHTS = [0.4, 0.35, 0.25];
 
     // ── Sites: stargazing (mirrors stargaze) ──────────────────────────
     const STAR_SITES = [
@@ -256,29 +257,31 @@
     // ── NWS gridpoint helpers ─────────────────────────────────────────
     // ── Sunset scoring (mirrors sd_sunset) ────────────────────────────
     // score (0-100) = canvas × light:
-    //   canvas — high/mid clouds overhead that can catch post-sunset color;
-    //            best near 65% cover. Thin high cirrus stays a good canvas even
-    //            at full cover (0% = bland clear, 100% = still colorful, not gray).
-    //   light  — fraction of sunlight that reaches those clouds; cut by local
-    //            low clouds hiding the horizon and by offshore low clouds
-    //            blocking the under-lighting before it arrives. Offshore low is
-    //            an unreliable blocker (color often still arrives), so weighted
-    //            lightly — it dims the score rather than killing it.
+    //   canvas — high + mid clouds overhead that catch post-sunset color
+    //            (combined as overlapping layers). Best near 55% cover; clear
+    //            sky is a bland C, full thin cirrus a B. Thick mid decks
+    //            (altostratus) are gray rather than colorful, so they're cut.
+    //   light  — fraction of sunlight that reaches the canvas: cut by local low
+    //            clouds hiding the horizon and by cloud out along the light path.
     function scoreSunset(c) {
-        const canvas = Math.min(100, c.high + 0.5 * c.mid);
-        const canvasScore = 100 * Math.exp(-((canvas - 65) ** 2) / 4900);
-        const blockage = Math.max(c.low, 0.35 * c.offshoreLow);
-        let score = Math.round(canvasScore * (1 - blockage / 100));
-        if (c.fog) score = Math.min(score, 15);
+        const canvas = 100 - (100 - c.high) * (100 - c.mid) / 100;
+        let canvasScore = 40 + 60 * Math.exp(-((canvas - 55) ** 2) / 1600);
+        if (c.mid > 60) canvasScore *= 1 - 0.5 * (c.mid - 60) / 40;
+        const light = (1 - 0.9 * c.low / 100) * (1 - 0.85 * c.pathBlock / 100);
+        let score = Math.round(canvasScore * light);
+        if (c.rain) score = Math.min(score, 20);
+        if (c.fog)  score = Math.min(score, 15);
 
         let label;
-        if (c.fog)                    label = 'Fog';
-        else if (c.low >= 60)         label = 'Marine layer';
-        else if (c.offshoreLow >= 60) label = 'Light blocked offshore';
-        else if (c.low >= 30)         label = 'Patchy low clouds';
-        else if (canvas >= 80)        label = 'Overcast high clouds';
-        else if (canvas >= 15)        label = 'High clouds — good color';
-        else                          label = 'Clear & golden';
+        if (c.fog)                  label = 'Fog';
+        else if (c.rain)            label = 'Rain';
+        else if (c.low >= 60)       label = 'Marine layer';
+        else if (c.pathBlock >= 50) label = 'Horizon blocked';
+        else if (c.low >= 30)       label = 'Patchy low clouds';
+        else if (c.mid > 70)        label = 'Thick cloud deck';
+        else if (canvas >= 80)      label = 'Overcast high clouds';
+        else if (canvas >= 15)      label = 'Clouds to catch color';
+        else                        label = 'Clear & golden';
         return { score, label };
     }
     function gradeFromScore(score) {
@@ -289,36 +292,52 @@
         if (score >= 25) return 'D';
         return 'F';
     }
-    // One multi-location request: every spot plus the offshore point (last).
+    // Degrees clockwise from north where the sun meets the horizon.
+    function sunsetAzimuth(date) {
+        const { dec } = sunCoords(toDays(date));
+        return 360 - Math.acos(Math.sin(dec) / Math.cos(RAD * SD_LAT)) / RAD;
+    }
+    // One multi-location request: every spot, then the light-path points.
+    // Path uses today's azimuth — it drifts only a few degrees over the week.
     // 7 forecast days so weekend prep can score Sat/Sun sunsets too.
     let _cloudLayersPromise = null;
     function fetchCloudLayers() {
         if (!_cloudLayersPromise) {
-            const pts = [...SPOTS, OFFSHORE];
-            const lats = pts.map(p => p.lat).join(',');
-            const lons = pts.map(p => p.lon).join(',');
-            _cloudLayersPromise = fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code&forecast_days=7&timezone=auto`)
+            const az = sunsetAzimuth(new Date()) * RAD;
+            const path = PATH_KM.map(km => ({
+                lat: SD_LAT + (km / 111) * Math.cos(az),
+                lon: SD_LON + (km / (111 * Math.cos(SD_LAT * RAD))) * Math.sin(az),
+            }));
+            const pts = [...SPOTS, ...path];
+            const lats = pts.map(p => p.lat.toFixed(3)).join(',');
+            const lons = pts.map(p => p.lon.toFixed(3)).join(',');
+            _cloudLayersPromise = fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code&forecast_days=7&timezone=America%2FLos_Angeles`)
                 .then(r => { if (!r.ok) throw new Error(`Open-Meteo: ${r.status}`); return r.json(); });
         }
         return _cloudLayersPromise;
     }
-    // Open-Meteo hourly times are local-ISO hours; round to the nearest hour
-    // (sunset color peaks just after the listed sunset minute).
-    function omIndexAt(times, date) {
-        const rounded = new Date(date.getTime() + 1800000);
-        const key = rounded.toLocaleString('sv-SE', { timeZone: 'America/Los_Angeles' }).slice(0, 13).replace(' ', 'T') + ':00';
-        return times.indexOf(key);
+    // Open-Meteo hourly times are local-ISO hours. Sunset color peaks ~10–20
+    // min after the listed sunset minute, so evaluate there, interpolating
+    // between the two surrounding hours.
+    function localHourKey(date) {
+        return date.toLocaleString('sv-SE', { timeZone: 'America/Los_Angeles' }).slice(0, 13).replace(' ', 'T') + ':00';
     }
     const FOG_CODES = new Set([45, 48]);
+    const isRain = (code) => (code >= 51 && code <= 67) || (code >= 80 && code <= 82) || code >= 95;
     function cloudsAt(result, date) {
         const h = result.hourly;
-        const i = omIndexAt(h.time, date);
-        if (i === -1) return null;
+        const t = new Date(date.getTime() + 15 * 60000);
+        const i = h.time.indexOf(localHourKey(t));
+        if (i === -1 || i + 1 >= h.time.length) return null;
+        const f = t.getMinutes() / 60;
+        const lerp = (arr) => Math.round(arr[i] * (1 - f) + arr[i + 1] * f);
+        const code = h.weather_code[f < 0.5 ? i : i + 1];
         return {
-            low: h.cloud_cover_low[i],
-            mid: h.cloud_cover_mid[i],
-            high: h.cloud_cover_high[i],
-            fog: FOG_CODES.has(h.weather_code[i]),
+            low: lerp(h.cloud_cover_low),
+            mid: lerp(h.cloud_cover_mid),
+            high: lerp(h.cloud_cover_high),
+            fog: FOG_CODES.has(code),
+            rain: isRain(code),
         };
     }
 
@@ -331,7 +350,7 @@
             const lats = STAR_SITES.map(s => s.lat).join(',');
             const lons = STAR_SITES.map(s => s.lon).join(',');
             // weather_code included only because the shared cloudsAt() reads it.
-            _starCloudPromise = fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code&forecast_days=7&timezone=auto`)
+            _starCloudPromise = fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&hourly=cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code&forecast_days=7&timezone=America%2FLos_Angeles`)
                 .then(r => { if (!r.ok) throw new Error(`Open-Meteo: ${r.status}`); return r.json(); });
         }
         return _starCloudPromise;
@@ -1061,11 +1080,16 @@
 
     async function evaluateSunset(date) {
         const [sunset, cloudData] = await Promise.all([fetchSunset(date), fetchCloudLayers()]);
-        const offshore = cloudsAt(cloudData[cloudData.length - 1], sunset);
+        let pathBlock = 0;
+        cloudData.slice(SPOTS.length).forEach((r, k) => {
+            const c = cloudsAt(r, sunset);
+            if (c) pathBlock += PATH_WEIGHTS[k] * Math.max(c.low, 0.7 * c.mid, 0.3 * c.high);
+        });
+        pathBlock = Math.round(pathBlock);
         const evaluated = SPOTS.map((s, i) => {
             const c = cloudsAt(cloudData[i], sunset);
             if (!c) return null;
-            c.offshoreLow = offshore ? offshore.low : 0;
+            c.pathBlock = pathBlock;
             const { score, label } = scoreSunset(c);
             return { ...s, clouds: c, score, label, grade: gradeFromScore(score) };
         }).filter(Boolean);
@@ -1321,7 +1345,7 @@
                     <div class="flex items-center justify-between gap-4">
                         <div>
                             <div class="text-xl font-semibold">${top.name}</div>
-                            <div class="text-sm text-slate-300">${top.label} · ${top.clouds.high}% high · ${top.clouds.low}% low</div>
+                            <div class="text-sm text-slate-300">${top.label} · ${top.clouds.high}% high · ${top.clouds.mid}% mid · ${top.clouds.low}% low</div>
                         </div>
                         <div class="flex items-center gap-4 flex-shrink-0">
                             <svg id="sunHorizon" viewBox="0 0 100 70" aria-hidden="true" style="width:80px;height:56px;filter:drop-shadow(0 2px 8px rgba(0,0,0,0.35));">
@@ -1569,7 +1593,7 @@
                     <div class="flex items-baseline justify-between">
                         <div>
                             <div class="font-semibold">${winner.night} · ${winner.top.name}</div>
-                            <div class="text-xs text-slate-400 mt-0.5">${winner.top.label} · ${winner.top.clouds.high}% high · ${winner.top.clouds.low}% low · ${fmtTime(winner.sunset)}</div>
+                            <div class="text-xs text-slate-400 mt-0.5">${winner.top.label} · ${winner.top.clouds.high}% high · ${winner.top.clouds.mid}% mid · ${winner.top.clouds.low}% low · ${fmtTime(winner.sunset)}</div>
                         </div>
                         <div class="text-3xl font-bold leading-none grade-${winner.top.grade}">${winner.top.grade}</div>
                     </div>
